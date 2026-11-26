@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -58,6 +59,7 @@ import app.podium.core.designsystem.artwork.LocalArtworkLoader
 import app.podium.core.designsystem.tonal.TonePalette
 import app.podium.feature.online.OnlineActions
 import app.podium.player.api.PlayIntent
+import app.podium.player.api.PlaybackStatus
 import app.podium.player.api.RepeatMode
 import app.podium.ytm.YtmArtworkImage
 import app.podium.ytm.YtmTheme
@@ -300,12 +302,22 @@ fun YtmNowPlayingSheet(
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                tint = colors.background,
-                                modifier = Modifier.size(36.dp),
-                            )
+                            val isBuffering = snapshot.status is PlaybackStatus.Loading ||
+                                snapshot.status is PlaybackStatus.Buffering
+                            if (isBuffering) {
+                                CircularProgressIndicator(
+                                    color = colors.background,
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.size(30.dp),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = colors.background,
+                                    modifier = Modifier.size(36.dp),
+                                )
+                            }
                         }
                         IconButton(
                             onClick = { controller.next() },
