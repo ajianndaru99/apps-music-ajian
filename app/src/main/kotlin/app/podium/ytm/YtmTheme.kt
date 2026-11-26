@@ -105,13 +105,14 @@ fun YtmTheme(
         onSurfaceVariant = ytmColors.onSurfaceVariant,
     )
     val materialType = Typography(
-        headlineMedium = ytmType.headlineMedium.copy(color = ytmColors.onSurface),
-        titleLarge = ytmType.titleLarge.copy(color = ytmColors.onSurface),
-        titleMedium = ytmType.titleMedium.copy(color = ytmColors.onSurface),
-        bodyLarge = ytmType.bodyLarge.copy(color = ytmColors.onSurface),
-        bodyMedium = ytmType.bodyMedium.copy(color = ytmColors.onSurfaceVariant),
-        labelMedium = ytmType.labelMedium.copy(color = ytmColors.onSurface),
-        labelSmall = ytmType.labelSmall.copy(color = ytmColors.onSurfaceVariant),
+        headlineMedium = ytmType.headlineMedium,
+        titleLarge = ytmType.titleLarge,
+        titleMedium = ytmType.titleMedium,
+        bodyLarge = ytmType.bodyLarge,
+        bodyMedium = ytmType.bodyMedium,
+        labelLarge = ytmType.labelMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+        labelMedium = ytmType.labelMedium,
+        labelSmall = ytmType.labelSmall,
     )
 
     CompositionLocalProvider(

@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.podium.AppGraph
 import app.podium.feature.settings.ServiceAccount
+import app.podium.ytm.YtmGoogleSignInButton
 import app.podium.ytm.YtmTheme
 
 @Composable
@@ -159,16 +160,7 @@ fun YtmSettingsScreen(
                                 Text("Sign out")
                             }
                         } else {
-                            Button(
-                                onClick = { graph.onlineService.signIn() },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = colors.accent,
-                                    contentColor = colors.background,
-                                ),
-                                shape = RoundedCornerShape(50),
-                            ) {
-                                Text("Sign in", fontWeight = FontWeight.SemiBold)
-                            }
+                            YtmGoogleSignInButton(onClick = { graph.onlineService.signIn() })
                         }
                     }
                 }
@@ -310,46 +302,6 @@ fun YtmSettingsScreen(
                             shape = RoundedCornerShape(50),
                         ) {
                             Text("Clear")
-                        }
-                    }
-                }
-            }
-
-            item(key = "interface") {
-                HorizontalDivider(color = colors.divider)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                ) {
-                    Text(
-                        text = "Interface",
-                        style = YtmTheme.type.labelMedium,
-                        color = colors.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(colors.surfaceVariant)
-                            .clickable { graph.deviceSettings.setUseYtmUi(false) }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Switch to Podium Classic UI",
-                                style = YtmTheme.type.titleMedium,
-                                color = colors.onSurface,
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = "Use the original wheel-driven Podium interface",
-                                style = YtmTheme.type.bodyMedium,
-                                color = colors.onSurfaceVariant,
-                            )
                         }
                     }
                 }

@@ -25,11 +25,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -542,6 +547,82 @@ fun rememberYtmOnlineActions(
 
             override val nowPlaying = kotlinx.coroutines.flow.MutableStateFlow<Track?>(null)
         }
+    }
+}
+
+@Composable
+fun YtmGoogleSignInButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    label: String = "Sign in",
+) {
+    val colors = YtmTheme.colors
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = colors.accent,
+            contentColor = colors.background,
+        ),
+        shape = RoundedCornerShape(50),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Canvas(modifier = Modifier.size(18.dp)) {
+            val stroke = size.minDimension * 0.22f
+            val inset = stroke / 2f
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            val topLeft = Offset(inset, inset)
+            // Google 4-color G mark
+            drawArc(
+                color = Color(0xFFEA4335),
+                startAngle = -145f,
+                sweepAngle = 110f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Butt),
+            )
+            drawArc(
+                color = Color(0xFFFBBC05),
+                startAngle = 145f,
+                sweepAngle = 70f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Butt),
+            )
+            drawArc(
+                color = Color(0xFF34A853),
+                startAngle = 35f,
+                sweepAngle = 110f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Butt),
+            )
+            drawArc(
+                color = Color(0xFF4285F4),
+                startAngle = -5f,
+                sweepAngle = 45f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Butt),
+            )
+            drawLine(
+                color = Color(0xFF4285F4),
+                start = Offset(size.width * 0.52f, size.height * 0.50f),
+                end = Offset(size.width - inset, size.height * 0.50f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Butt,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = label,
+            color = colors.background,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

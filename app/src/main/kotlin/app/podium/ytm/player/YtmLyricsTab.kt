@@ -105,7 +105,7 @@ fun YtmLyricsTab(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Podium sends song title, artist, album, and duration to LRCLIB to fetch synced lyrics.",
+                        text = "Send song title, artist, album, and duration to LRCLIB to fetch synced lyrics.",
                         style = YtmTheme.type.bodyMedium,
                         color = colors.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -119,7 +119,11 @@ fun YtmLyricsTab(
                         ),
                         shape = RoundedCornerShape(50),
                     ) {
-                        Text("Enable lyrics", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = "Enable lyrics",
+                            color = colors.background,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }

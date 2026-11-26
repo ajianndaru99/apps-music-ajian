@@ -43,6 +43,7 @@ import app.podium.core.model.PlaylistId
 import app.podium.feature.online.OnlineActions
 import app.podium.sources.api.Shelf
 import app.podium.ytm.YtmFilterChips
+import app.podium.ytm.YtmGoogleSignInButton
 import app.podium.ytm.YtmSectionHeader
 import app.podium.ytm.YtmSquareCard
 import app.podium.ytm.YtmTheme
@@ -133,16 +134,7 @@ fun YtmHomeScreen(
                             )
                         }
                         Spacer(Modifier.width(12.dp))
-                        Button(
-                            onClick = onSignIn,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.accent,
-                                contentColor = colors.background,
-                            ),
-                            shape = RoundedCornerShape(50),
-                        ) {
-                            Text("Sign in", fontWeight = FontWeight.SemiBold)
-                        }
+                        YtmGoogleSignInButton(onClick = onSignIn)
                     }
                 }
             }

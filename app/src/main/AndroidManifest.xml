@@ -22,7 +22,7 @@
         android:usesCleartextTraffic="false"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="Podium"
+        android:label="Ajian Music"
         android:supportsRtl="true"
         android:theme="@style/Theme.Podium">
 

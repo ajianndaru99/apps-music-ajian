@@ -51,6 +51,7 @@ import app.podium.sources.api.CapabilityAction
 import app.podium.sources.api.PlaylistSummary
 import app.podium.ytm.YtmArtworkImage
 import app.podium.ytm.YtmFilterChips
+import app.podium.ytm.YtmGoogleSignInButton
 import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
 import app.podium.ytm.openAlbumAction
@@ -251,16 +252,7 @@ fun YtmLibraryScreen(
                                     color = colors.onSurfaceVariant,
                                 )
                                 Spacer(Modifier.height(14.dp))
-                                Button(
-                                    onClick = { actions.signIn() },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = colors.accent,
-                                        contentColor = colors.background,
-                                    ),
-                                    shape = RoundedCornerShape(50),
-                                ) {
-                                    Text("Sign in", fontWeight = FontWeight.SemiBold)
-                                }
+                                YtmGoogleSignInButton(onClick = { actions.signIn() })
                             }
                         }
                     }
