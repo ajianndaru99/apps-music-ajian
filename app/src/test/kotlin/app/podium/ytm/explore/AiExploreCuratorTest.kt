@@ -68,7 +68,7 @@ class AiExploreCuratorTest {
             accountKey = { "google:userA" },
             nowMillis = { 1_700_000_000_000L },
             localeCountry = { "ID" },
-            transport = AiHttpTransport { _, _, _ ->
+            transport = AiHttpTransport { _, _, _, _ ->
                 calls++
                 error("should not be called")
             },
@@ -81,6 +81,57 @@ class AiExploreCuratorTest {
         assertTrue(bp.genres.isNotEmpty())
         assertTrue(bp.shelves.isNotEmpty())
         assertTrue(bp.genres.any { it.title.contains("Tulus") || it.title.contains("NIKI") })
+    }
+
+    @Test
+    fun `gemini discovers available model on 404 without wasting daily quota`() = runBlocking {
+        var now = 1_700_000_000_000L
+        settings.setAiExploreProvider(AiExploreProvider.GEMINI)
+        settings.setAiExploreApiKey("AIza-discovery-test")
+
+        val listModelsJson = """
+            {
+              "models": [
+                {"name": "models/gemini-2.0-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-3.9-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/embedding-001", "supportedGenerationMethods": ["embedContent"]}
+              ]
+            }
+        """.trimIndent()
+        val okJson = """{"candidates":[{"content":{"parts":[{"text":"{\"profileSummary\":\"Discovered Flash-Lite mix\",\"genres\":[{\"title\":\"Fresh Discovery\",\"query\":\"indie songs\",\"badge\":\"For You\"}],\"shelves\":[{\"title\":\"Weekend Hits\",\"subtitle\":\"Synced\",\"query\":\"top hits\"}]}"}]}}]}"""
+
+        val visitedUrls = mutableListOf<String>()
+        val curator = AiExploreCurator(
+            store = store,
+            online = online,
+            settings = settings,
+            accountKey = { "google:discover" },
+            nowMillis = { now },
+            localeCountry = { "ID" },
+            transport = AiHttpTransport { method, url, _, _ ->
+                visitedUrls += "$method $url"
+                when {
+                    method == "GET" && url.endsWith("/models") -> AiHttpResponse(200, listModelsJson)
+                    url.contains("gemini-3.9-flash-lite:generateContent") -> AiHttpResponse(200, okJson)
+                    else -> AiHttpResponse(404, """{"error":{"code":404,"message":"not found"}}""")
+                }
+            },
+        )
+
+        val result = curator.loadExplore()
+        assertEquals(ExploreBlueprintSource.AI_GEMINI, result.source)
+        assertEquals("Fresh Discovery", result.genres.first().title)
+        assertEquals("gemini-3.9-flash-lite", curator.quotaStatus().activeModel)
+        // Multiple 404 probes do NOT waste the daily call budget; only 1 successful call counted
+        assertEquals(1, curator.quotaStatus().callsUsedToday)
+        assertTrue(visitedUrls.any { it.startsWith("GET ") })
+
+        // Subsequent refresh after cooldown goes straight to cached working model without extra 404s
+        visitedUrls.clear()
+        now += 40_000L
+        curator.loadExplore(forceRefresh = true)
+        assertEquals(1, visitedUrls.size)
+        assertTrue(visitedUrls.single().contains("gemini-3.9-flash-lite:generateContent"))
     }
 
     @Test
@@ -113,11 +164,11 @@ class AiExploreCuratorTest {
             accountKey = { account },
             nowMillis = { now },
             localeCountry = { "ID" },
-            transport = AiHttpTransport { url, headers, body ->
+            transport = AiHttpTransport { _, url, headers, body ->
                 calls++
                 lastUrl = url
                 lastHeaderKey = headers["x-goog-api-key"].orEmpty()
-                promptsSeen += body
+                if (body != null) promptsSeen += body
                 AiHttpResponse(code = 200, body = geminiJson)
             },
         )
@@ -127,39 +178,34 @@ class AiExploreCuratorTest {
         assertEquals(ExploreBlueprintSource.AI_GEMINI, first.source)
         assertFalse(lastUrl.contains("AIza-test-free-key"))
         assertEquals("AIza-test-free-key", lastHeaderKey)
-        assertTrue(promptsSeen.last().contains("NIKI")) // from YouTube accountHistory
+        assertTrue(promptsSeen.last().contains("NIKI"))
 
-        // Second open 2 hours later without manual refresh: strictly 0 AI calls (reads 24h cache)
         now += 2L * 60 * 60 * 1000
         curator.loadExplore()
         assertEquals(1, calls)
 
-        // Switching to a different Google account gets its own personalized AI profile
         account = "google:userB"
         val userB = curator.loadExplore()
         assertEquals(2, calls)
         assertEquals("google:userB", userB.accountKey)
 
-        // Manual refresh within 30s cooldown on userB does not call AI
         now += 10_000L
         val tooSoon = curator.loadExplore(forceRefresh = true)
         assertEquals(2, calls)
         assertNotNull(tooSoon.statusNote)
 
-        // Manual refresh after 30s adapts using updated account history & avoids previous genre titles
         now += 35_000L
         curator.loadExplore(forceRefresh = true)
         assertEquals(3, calls)
         assertTrue(promptsSeen.last().contains("Indie Santai"))
 
-        // Zero-quota shuffle never hits transport
         curator.shuffleLocal(userB)
         assertEquals(3, calls)
     }
 
     @Test
     fun `weekend failover automatically switches from rate limited gemini to backup groq key`() = runBlocking {
-        var now = 1_700_000_000_000L
+        val now = 1_700_000_000_000L
         val calledUrls = mutableListOf<String>()
         settings.setAiExploreProvider(AiExploreProvider.GEMINI)
         settings.setAiExploreApiKey("AIza-exhausted")
@@ -183,7 +229,7 @@ class AiExploreCuratorTest {
             accountKey = { "google:weekend" },
             nowMillis = { now },
             localeCountry = { "ID" },
-            transport = AiHttpTransport { url, _, _ ->
+            transport = AiHttpTransport { _, url, _, _ ->
                 calledUrls += url
                 if (url.contains("generativelanguage.googleapis.com")) {
                     AiHttpResponse(code = 429, body = "RESOURCE_EXHAUSTED", retryAfterSeconds = 3600)
@@ -214,7 +260,7 @@ class AiExploreCuratorTest {
             accountKey = { "google:cap" },
             nowMillis = { now },
             localeCountry = { "ID" },
-            transport = AiHttpTransport { _, _, _ ->
+            transport = AiHttpTransport { _, _, _, _ ->
                 calls++
                 AiHttpResponse(code = 200, body = validBody)
             },
@@ -229,7 +275,7 @@ class AiExploreCuratorTest {
                 accountKey = { "google:cap_$i" },
                 nowMillis = { now },
                 localeCountry = { "ID" },
-                transport = AiHttpTransport { _, _, _ ->
+                transport = AiHttpTransport { _, _, _, _ ->
                     calls++
                     AiHttpResponse(code = 200, body = validBody)
                 },
@@ -238,7 +284,6 @@ class AiExploreCuratorTest {
         }
         assertEquals(AiExploreCurator.MAX_AI_CALLS_PER_DAY, calls)
 
-        // Call past daily cap must be blocked locally and still return adapted local habits
         val blocked = curator.loadExplore(forceRefresh = true)
         assertEquals(AiExploreCurator.MAX_AI_CALLS_PER_DAY, calls)
         assertEquals(ExploreBlueprintSource.LOCAL_FALLBACK, blocked.source)

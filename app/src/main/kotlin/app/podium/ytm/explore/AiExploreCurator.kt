@@ -58,6 +58,7 @@ data class AiQuotaStatus(
     val hasApiKey: Boolean,
     val hasBackupKey: Boolean,
     val provider: AiExploreProvider,
+    val activeModel: String? = null,
 )
 
 internal data class AiHttpResponse(
@@ -67,7 +68,12 @@ internal data class AiHttpResponse(
 )
 
 internal fun interface AiHttpTransport {
-    suspend fun postJson(url: String, headers: Map<String, String>, body: String): AiHttpResponse
+    suspend fun send(
+        method: String,
+        url: String,
+        headers: Map<String, String>,
+        body: String?,
+    ): AiHttpResponse
 }
 
 internal interface ExploreCacheStore {
@@ -77,6 +83,8 @@ internal interface ExploreCacheStore {
     fun incrementCallsOnDay(dayKey: String): Int
     fun rateLimitedUntilMs(): Long
     fun setRateLimitedUntilMs(untilMs: Long)
+    fun workingModel(provider: AiExploreProvider): String?
+    fun setWorkingModel(provider: AiExploreProvider, model: String?)
     fun clearAccountCache(accountKey: String)
     fun clearAllCaches()
 }
@@ -108,6 +116,7 @@ class AiExploreCurator internal constructor(
         val now = nowMillis()
         val activeAccount = normalizedAccountKey(accountKey(), online.status.value)
         val cached = store.readBlueprint(activeAccount)
+        val provider = settings.aiExploreProvider.value
         return AiQuotaStatus(
             callsUsedToday = store.callsOnDay(dayKey(now)),
             maxCallsPerDay = MAX_AI_CALLS_PER_DAY,
@@ -115,7 +124,8 @@ class AiExploreCurator internal constructor(
             rateLimitedUntilMs = store.rateLimitedUntilMs(),
             hasApiKey = settings.aiExploreApiKey.value.isNotBlank(),
             hasBackupKey = settings.aiExploreBackupApiKey.value.isNotBlank(),
-            provider = settings.aiExploreProvider.value,
+            provider = provider,
+            activeModel = store.workingModel(provider),
         )
     }
 
@@ -177,7 +187,6 @@ class AiExploreCurator internal constructor(
         val today = dayKey(now)
         val usedToday = store.callsOnDay(today)
 
-        // If rate-limited on primary/all or daily budget reached -> adapt locally using latest YouTube habits!
         if (rateLimitedUntil > now && backupKey.isEmpty()) {
             val note = "AI cooldown active — refreshed using latest YouTube likes & history"
             return@withLock buildLocalFallback(key, now, taste, note = note, shuffled = forceRefresh)
@@ -198,10 +207,8 @@ class AiExploreCurator internal constructor(
 
         var lastOutcome: AiCallOutcome = AiCallOutcome.Failed("no key")
 
-        // Try Primary Provider if available and not in rate-limit backoff
         if (primaryKey.isNotEmpty() && rateLimitedUntil <= now) {
-            store.incrementCallsOnDay(today)
-            lastOutcome = callProvider(primaryProvider, primaryKey, prompt, key, now)
+            lastOutcome = callProviderWithDiscovery(primaryProvider, primaryKey, prompt, key, now, today)
             if (lastOutcome is AiCallOutcome.Success) {
                 store.writeBlueprint(key, lastOutcome.blueprint)
                 return@withLock lastOutcome.blueprint
@@ -213,8 +220,7 @@ class AiExploreCurator internal constructor(
             (backupProvider != primaryProvider || backupKey != primaryKey) &&
             store.callsOnDay(today) < MAX_AI_CALLS_PER_DAY
         if (canTryBackup) {
-            store.incrementCallsOnDay(today)
-            val backupOutcome = callProvider(backupProvider, backupKey, prompt, key, now)
+            val backupOutcome = callProviderWithDiscovery(backupProvider, backupKey, prompt, key, now, today)
             if (backupOutcome is AiCallOutcome.Success) {
                 val noted = backupOutcome.blueprint.copy(
                     statusNote = if (primaryKey.isNotEmpty()) {
@@ -264,7 +270,6 @@ class AiExploreCurator internal constructor(
     private suspend fun gatherTasteSignals(syncLikes: Boolean): TasteSignals {
         if (syncLikes) {
             runCatching { online.refreshLibrary() }
-            // Brief yield so an active network likes sync (VLLM) updates Room if fast
             delay(250L)
         } else {
             runCatching { online.refreshLibrary() }
@@ -288,7 +293,6 @@ class AiExploreCurator internal constructor(
             (online.shelves() as? Outcome.Success)?.value.orEmpty()
         }.getOrElse { emptyList() }
 
-        // Prioritize recent in-app plays + YouTube account history + liked songs for adaptive refresh
         val orderedSeeds = (recent.take(6) + accountHistory.take(8) + liked.take(8) + shelves.flatMap { it.tracks }.take(6))
             .distinctBy { "${it.title.lowercase()}|${it.artistDisplay.lowercase()}" }
             .take(15)
@@ -318,17 +322,97 @@ class AiExploreCurator internal constructor(
         )
     }
 
-    private suspend fun callProvider(
+    private suspend fun callProviderWithDiscovery(
         provider: AiExploreProvider,
         apiKey: String,
         prompt: String,
         accountKey: String,
         now: Long,
+        today: String,
     ): AiCallOutcome {
+        val candidates = buildList {
+            store.workingModel(provider)?.takeIf { it.isNotBlank() }?.let { add(it) }
+            addAll(defaultModelCandidates(provider))
+        }.distinct().toMutableList()
+
+        var discovered = false
+        var lastOutcome: AiCallOutcome = AiCallOutcome.Failed("no models")
+        var idx = 0
+        var attempts = 0
+
+        while (idx < candidates.size && attempts < MAX_MODEL_CANDIDATES_PER_REQUEST) {
+            val model = candidates[idx++]
+            attempts++
+            val result = invokeSingleModel(provider, model, apiKey, prompt, accountKey, now)
+
+            when (result) {
+                is SingleModelResult.Success -> {
+                    store.incrementCallsOnDay(today)
+                    store.setWorkingModel(provider, model)
+                    return AiCallOutcome.Success(result.blueprint)
+                }
+                is SingleModelResult.RateLimited -> {
+                    store.incrementCallsOnDay(today)
+                    return AiCallOutcome.RateLimited(result.retryAfterSeconds)
+                }
+                is SingleModelResult.ModelNotFound -> {
+                    // HTTP 404: model retired/unavailable on this key (0 quota consumed).
+                    if (store.workingModel(provider) == model) {
+                        store.setWorkingModel(provider, null)
+                    }
+                    if (!discovered) {
+                        discovered = true
+                        val liveModels = discoverModels(provider, apiKey)
+                        liveModels.forEach { m ->
+                            if (m !in candidates) candidates.add(m)
+                        }
+                    }
+                    lastOutcome = AiCallOutcome.Failed("HTTP 404 ($model)")
+                }
+                is SingleModelResult.Failed -> {
+                    // Don't burn daily counter on 401/403 key typo or network disconnect
+                    return AiCallOutcome.Failed(result.reason)
+                }
+            }
+        }
+        return lastOutcome
+    }
+
+    private suspend fun discoverModels(provider: AiExploreProvider, apiKey: String): List<String> = runCatching {
+        when (provider) {
+            AiExploreProvider.GEMINI -> {
+                val res = transport.send(
+                    method = "GET",
+                    url = "https://generativelanguage.googleapis.com/v1beta/models",
+                    headers = mapOf("x-goog-api-key" to apiKey),
+                    body = null,
+                )
+                if (res.code in 200..299) rankGeminiModels(res.body) else emptyList()
+            }
+            AiExploreProvider.GROQ -> {
+                val res = transport.send(
+                    method = "GET",
+                    url = "https://api.groq.com/openai/v1/models",
+                    headers = mapOf("Authorization" to "Bearer $apiKey"),
+                    body = null,
+                )
+                if (res.code in 200..299) rankGroqModels(res.body) else emptyList()
+            }
+        }
+    }.getOrElse { emptyList() }
+
+    private suspend fun invokeSingleModel(
+        provider: AiExploreProvider,
+        model: String,
+        apiKey: String,
+        prompt: String,
+        accountKey: String,
+        now: Long,
+    ): SingleModelResult {
         val response = runCatching {
             when (provider) {
                 AiExploreProvider.GEMINI -> {
-                    val url = "https://generativelanguage.googleapis.com/v1beta/models/${provider.defaultModel}:generateContent"
+                    val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
                     val body = JSONObject().apply {
                         put(
                             "contents",
@@ -348,7 +432,8 @@ class AiExploreCurator internal constructor(
                             },
                         )
                     }.toString()
-                    transport.postJson(
+                    transport.send(
+                        method = "POST",
                         url = url,
                         headers = mapOf(
                             "x-goog-api-key" to apiKey,
@@ -361,7 +446,7 @@ class AiExploreCurator internal constructor(
                 AiExploreProvider.GROQ -> {
                     val url = "https://api.groq.com/openai/v1/chat/completions"
                     val body = JSONObject().apply {
-                        put("model", provider.defaultModel)
+                        put("model", model)
                         put("temperature", 0.85)
                         put("max_tokens", 900)
                         put("response_format", JSONObject().put("type", "json_object"))
@@ -372,7 +457,8 @@ class AiExploreCurator internal constructor(
                                 .put(JSONObject().put("role", "user").put("content", prompt)),
                         )
                     }.toString()
-                    transport.postJson(
+                    transport.send(
+                        method = "POST",
                         url = url,
                         headers = mapOf(
                             "Authorization" to "Bearer $apiKey",
@@ -383,21 +469,24 @@ class AiExploreCurator internal constructor(
                 }
             }
         }.getOrElse {
-            return AiCallOutcome.Failed(it.message ?: "network error")
+            return SingleModelResult.Failed(it.message ?: "network error")
         }
 
+        if (response.code == 404) {
+            return SingleModelResult.ModelNotFound
+        }
         if (response.code == 429) {
-            return AiCallOutcome.RateLimited(response.retryAfterSeconds)
+            return SingleModelResult.RateLimited(response.retryAfterSeconds)
         }
         if (response.code == 401 || response.code == 403) {
-            return AiCallOutcome.Failed("invalid API key")
+            return SingleModelResult.Failed("invalid API key")
         }
         if (response.code !in 200..299) {
-            return AiCallOutcome.Failed("HTTP ${response.code}")
+            return SingleModelResult.Failed("HTTP ${response.code}")
         }
 
         val rawText = extractModelText(provider, response.body)
-            ?: return AiCallOutcome.Failed("empty AI response")
+            ?: return SingleModelResult.Failed("empty AI response")
 
         val parsed = parseBlueprintJson(
             rawJson = rawText,
@@ -407,9 +496,9 @@ class AiExploreCurator internal constructor(
                 AiExploreProvider.GEMINI -> ExploreBlueprintSource.AI_GEMINI
                 AiExploreProvider.GROQ -> ExploreBlueprintSource.AI_GROQ
             },
-        ) ?: return AiCallOutcome.Failed("invalid JSON format")
+        ) ?: return SingleModelResult.Failed("invalid JSON format")
 
-        return AiCallOutcome.Success(parsed)
+        return SingleModelResult.Success(parsed)
     }
 
     private fun extractModelText(provider: AiExploreProvider, rawResponse: String): String? = runCatching {
@@ -643,6 +732,13 @@ class AiExploreCurator internal constructor(
         val signedIn: Boolean,
     )
 
+    private sealed interface SingleModelResult {
+        data class Success(val blueprint: ExploreBlueprint) : SingleModelResult
+        data class RateLimited(val retryAfterSeconds: Long?) : SingleModelResult
+        data object ModelNotFound : SingleModelResult
+        data class Failed(val reason: String) : SingleModelResult
+    }
+
     private sealed interface AiCallOutcome {
         data class Success(val blueprint: ExploreBlueprint) : AiCallOutcome
         data class RateLimited(val retryAfterSeconds: Long?) : AiCallOutcome
@@ -655,32 +751,105 @@ class AiExploreCurator internal constructor(
         const val MANUAL_REFRESH_COOLDOWN_MS = 30_000L
         const val RATE_LIMIT_BACKOFF_MS = 24L * 60 * 60 * 1000
         const val MAX_AI_CALLS_PER_DAY = 5
+        private const val MAX_MODEL_CANDIDATES_PER_REQUEST = 5
+
+        fun defaultModelCandidates(provider: AiExploreProvider): List<String> = when (provider) {
+            AiExploreProvider.GEMINI -> listOf(
+                "gemini-3.5-flash-lite",
+                "gemini-3.8-flash",
+                "gemini-3.6-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-2.0-flash",
+            )
+            AiExploreProvider.GROQ -> listOf(
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+            )
+        }
     }
 }
 
-private object UrlConnectionAiTransport : AiHttpTransport {
-    override suspend fun postJson(url: String, headers: Map<String, String>, body: String): AiHttpResponse =
-        withContext(Dispatchers.IO) {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 10_000
-                readTimeout = 18_000
-                doOutput = true
-                headers.forEach { (k, v) -> setRequestProperty(k, v) }
+private val GEMINI_VERSION_REGEX = Regex("""gemini-(\d+)(?:\.(\d+))?""")
+
+internal fun rankGeminiModels(modelsJson: String): List<String> = runCatching {
+    val root = JSONObject(modelsJson)
+    val arr = root.optJSONArray("models") ?: return emptyList()
+    val ranked = mutableListOf<Pair<Int, String>>()
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i) ?: continue
+        val rawName = obj.optString("name").removePrefix("models/").trim()
+        val lower = rawName.lowercase()
+        if (!lower.startsWith("gemini")) continue
+        if ("tts" in lower || "image" in lower || "audio" in lower || "live" in lower ||
+            "embedding" in lower || "robotics" in lower || "vision" in lower
+        ) continue
+
+        val methods = obj.optJSONArray("supportedGenerationMethods") ?: continue
+        var canGenerate = false
+        for (j in 0 until methods.length()) {
+            if (methods.optString(j) == "generateContent") {
+                canGenerate = true
+                break
             }
-            try {
+        }
+        if (!canGenerate) continue
+
+        val match = GEMINI_VERSION_REGEX.find(lower)
+        val major = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val minor = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+        var score = major * 100 + minor * 10
+        if ("flash-lite" in lower) score += 25
+        else if ("flash" in lower) score += 15
+        if ("exp" in lower || "preview" in lower) score -= 5
+        ranked += score to rawName
+    }
+    ranked.sortedByDescending { it.first }.map { it.second }.distinct()
+}.getOrElse { emptyList() }
+
+internal fun rankGroqModels(modelsJson: String): List<String> = runCatching {
+    val root = JSONObject(modelsJson)
+    val arr = root.optJSONArray("data") ?: return emptyList()
+    val out = mutableListOf<String>()
+    for (i in 0 until arr.length()) {
+        val id = arr.optJSONObject(i)?.optString("id")?.trim().orEmpty()
+        val lower = id.lowercase()
+        if (id.isEmpty() || "whisper" in lower || "guard" in lower || "tts" in lower) continue
+        if ("llama" in lower || "qwen" in lower || "gpt" in lower) out += id
+    }
+    out.distinct()
+}.getOrElse { emptyList() }
+
+private object UrlConnectionAiTransport : AiHttpTransport {
+    override suspend fun send(
+        method: String,
+        url: String,
+        headers: Map<String, String>,
+        body: String?,
+    ): AiHttpResponse = withContext(Dispatchers.IO) {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 10_000
+            readTimeout = 18_000
+            doOutput = body != null
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
+        }
+        try {
+            if (body != null) {
                 conn.outputStream.use { os ->
                     os.write(body.toByteArray(Charsets.UTF_8))
                 }
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                val retryAfter = conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull()
-                AiHttpResponse(code = code, body = text, retryAfterSeconds = retryAfter)
-            } finally {
-                conn.disconnect()
             }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val retryAfter = conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull()
+            AiHttpResponse(code = code, body = text, retryAfterSeconds = retryAfter)
+        } finally {
+            conn.disconnect()
         }
+    }
 }
 
 internal class PrefsExploreCacheStore(
@@ -790,12 +959,24 @@ internal class PrefsExploreCacheStore(
         prefs.edit { putLong(KEY_RATE_LIMITED_UNTIL, untilMs) }
     }
 
+    override fun workingModel(provider: AiExploreProvider): String? =
+        prefs.getString("$KEY_WORKING_MODEL_PREFIX${provider.name}", null)
+
+    override fun setWorkingModel(provider: AiExploreProvider, model: String?) {
+        prefs.edit {
+            if (model.isNullOrBlank()) remove("$KEY_WORKING_MODEL_PREFIX${provider.name}")
+            else putString("$KEY_WORKING_MODEL_PREFIX${provider.name}", model)
+        }
+    }
+
     override fun clearAccountCache(accountKey: String) {
         prefs.edit { remove("$KEY_BLUEPRINT_PREFIX$accountKey") }
     }
 
     override fun clearAllCaches() {
-        val keysToRemove = prefs.all.keys.filter { it.startsWith(KEY_BLUEPRINT_PREFIX) }
+        val keysToRemove = prefs.all.keys.filter {
+            it.startsWith(KEY_BLUEPRINT_PREFIX) || it.startsWith(KEY_WORKING_MODEL_PREFIX)
+        }
         prefs.edit {
             keysToRemove.forEach { remove(it) }
             remove(KEY_RATE_LIMITED_UNTIL)
@@ -804,8 +985,9 @@ internal class PrefsExploreCacheStore(
 
     private companion object {
         const val KEY_BLUEPRINT_PREFIX = "bp_"
-        const val KEY_CALL_DAY = "call_day"
-        const val KEY_CALL_COUNT = "call_count"
+        const val KEY_WORKING_MODEL_PREFIX = "model_"
+        const val KEY_CALL_DAY = "call_day_v2"
+        const val KEY_CALL_COUNT = "call_count_v2"
         const val KEY_RATE_LIMITED_UNTIL = "rate_limited_until"
     }
 }

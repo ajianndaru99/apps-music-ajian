@@ -137,7 +137,7 @@ interface DeviceSettingsRepository {
 }
 
 enum class AiExploreProvider(val label: String, val defaultModel: String) {
-    GEMINI("Google Gemini (Free Tier)", "gemini-2.5-flash-lite"),
+    GEMINI("Google Gemini (Free Tier)", "gemini-3.5-flash-lite"),
     GROQ("Groq (Free Tier)", "llama-3.3-70b-versatile"),
 }
 

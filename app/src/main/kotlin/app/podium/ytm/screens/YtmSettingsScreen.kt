@@ -433,6 +433,26 @@ fun YtmSettingsScreen(
                                 Text("Remove")
                             }
                         }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                text = "Explore AI recommendation cache",
+                                style = YtmTheme.type.bodyMedium,
+                                color = colors.onSurface,
+                            )
+                            Text(
+                                text = "${aiQuota.callsUsedToday}/${aiQuota.maxCallsPerDay} AI calls today" +
+                                    (aiQuota.activeModel?.let { " • $it" }.orEmpty()),
+                                style = YtmTheme.type.labelSmall,
+                                color = colors.onSurfaceMuted,
+                            )
+                        }
                         OutlinedButton(
                             onClick = {
                                 graph.aiExplore.clearCache()
@@ -441,15 +461,9 @@ fun YtmSettingsScreen(
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
                             shape = RoundedCornerShape(50),
                         ) {
-                            Text("Reset cache")
+                            Text("Clear")
                         }
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "${aiQuota.callsUsedToday}/${aiQuota.maxCallsPerDay} AI calls used today • Stored locally on device only",
-                        style = YtmTheme.type.labelSmall,
-                        color = colors.onSurfaceMuted,
-                    )
                     Spacer(Modifier.height(14.dp))
                     Text(
                         text = "Backup AI Key (Optional • Weekend Failover)",
