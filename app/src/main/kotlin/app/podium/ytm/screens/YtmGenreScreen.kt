@@ -53,19 +53,25 @@ fun YtmGenreScreen(
     onBack: () -> Unit,
     onOpenCollection: (PlaylistId, String) -> Unit,
     onOpenArtist: (ArtistId, String) -> Unit,
+    searchQuery: String = genre,
 ) {
     val colors = YtmTheme.colors
     val snapshot by graph.playbackController.snapshot.collectAsStateWithLifecycle()
     val likedIds by graph.favorites.favorites.collectAsStateWithLifecycle()
 
-    var tracks by remember(genre) { mutableStateOf<List<Track>>(emptyList()) }
-    var loading by remember(genre) { mutableStateOf(true) }
+    var tracks by remember(genre, searchQuery) { mutableStateOf<List<Track>>(emptyList()) }
+    var loading by remember(genre, searchQuery) { mutableStateOf(true) }
 
-    LaunchedEffect(genre) {
+    LaunchedEffect(genre, searchQuery) {
         loading = true
-        when (val result = graph.online.genre(genre, offset = 0, limit = 50)) {
-            is Outcome.Success -> tracks = result.value
-            is Outcome.Failure -> Unit
+        val nativeTracks = when (val result = graph.online.genre(genre, offset = 0, limit = 50)) {
+            is Outcome.Success -> result.value
+            is Outcome.Failure -> emptyList()
+        }
+        tracks = if (nativeTracks.isNotEmpty()) {
+            nativeTracks
+        } else {
+            graph.aiExplore.searchTracksForQuery(searchQuery.ifBlank { genre }, limit = 30)
         }
         loading = false
     }
@@ -106,9 +112,9 @@ fun YtmGenreScreen(
                     shape = RoundedCornerShape(50),
                     modifier = Modifier.padding(end = 12.dp),
                 ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = colors.background)
                     Spacer(Modifier.width(4.dp))
-                    Text("Play", fontWeight = FontWeight.SemiBold)
+                    Text("Play", color = colors.background, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

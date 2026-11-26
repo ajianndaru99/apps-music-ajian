@@ -24,7 +24,7 @@ sealed interface YtmRoute {
     data object Search : YtmRoute
     data class Collection(val id: PlaylistId, val title: String) : YtmRoute
     data class Artist(val id: ArtistId, val name: String) : YtmRoute
-    data class Genre(val name: String) : YtmRoute
+    data class Genre(val name: String, val query: String = name) : YtmRoute
     data object Settings : YtmRoute
 }
 

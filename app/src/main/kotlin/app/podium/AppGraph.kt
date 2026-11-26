@@ -276,8 +276,7 @@ class AppGraph(val context: Context) {
         if (power.value == Power.BOOTING) power.value = Power.ON
     }
 
-    /**
-     * Lyrics (LYRICS_ARCHITECTURE.md): LRCLIB by the song's metadata, only with the listener's consent
+    /** Lyrics (LYRICS_ARCHITECTURE.md): LRCLIB by the song's metadata, only with the listener's consent
      * (D-11), kept in the app's cache directory.
      */
     val lyrics = app.podium.core.lyrics.LyricsRepository(
@@ -285,6 +284,16 @@ class AppGraph(val context: Context) {
         cache = app.podium.core.lyrics.FileLyricsCache(java.io.File(context.cacheDir, "lyrics")),
         consent = { deviceSettings.onlineLyrics.value },
     )
+
+    /** Free-tier AI Explore curator: caches per-account discovery blueprints for 24h on device. */
+    val aiExplore by lazy {
+        app.podium.ytm.explore.AiExploreCurator(
+            context = context,
+            online = online,
+            settings = deviceSettings,
+            accountKey = { online.accountKey.value },
+        )
+    }
 
     /**
      * Debug builds: lyrics answered on the device instead of by the service (device tests of the lyric

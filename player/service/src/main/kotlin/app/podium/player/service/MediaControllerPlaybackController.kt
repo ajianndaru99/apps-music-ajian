@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -205,7 +206,10 @@ class MediaControllerPlaybackController(
         val extras = sessionExtras
         val uid = current?.mediaId
         val sameItem = extras.getString(PodiumExtras.CURRENT_UID) == uid
-        val item = current?.let { toNowPlaying(it, c.currentMediaItemIndex, c.mediaItemCount, extras.takeIf { sameItem }) }
+        val activeDurationMs = c.duration
+        val item = current?.let {
+            toNowPlaying(it, c.currentMediaItemIndex, c.mediaItemCount, extras.takeIf { sameItem }, activeDurationMs)
+        }
         _snapshot.value = PlaybackSnapshot(
             status = PlaybackStatusMapper.map(facts),
             intent = if (c.playWhenReady) PlayIntent.PLAY else PlayIntent.PAUSE,
@@ -223,14 +227,26 @@ class MediaControllerPlaybackController(
             recovery = recovery,
         )
         _queue.value = QueueView(
-            entries = (0 until c.mediaItemCount).map { index -> toEntry(c.getMediaItemAt(index), index == c.currentMediaItemIndex) },
+            entries = (0 until c.mediaItemCount).map { index ->
+                val isCurrent = index == c.currentMediaItemIndex
+                toEntry(c.getMediaItemAt(index), isCurrent, if (isCurrent) activeDurationMs else C.TIME_UNSET)
+            },
             currentIndex = c.currentMediaItemIndex,
             contextLabel = extras.getString(PodiumExtras.CONTEXT_LABEL),
         )
     }
 
-    private fun toNowPlaying(item: MediaItem, index: Int, size: Int, extras: Bundle?): NowPlayingItem {
+    private fun toNowPlaying(
+        item: MediaItem,
+        index: Int,
+        size: Int,
+        extras: Bundle?,
+        playerDurationMs: Long,
+    ): NowPlayingItem {
         val md = item.mediaMetadata
+        val kind = md.extras?.getString(PodiumExtras.MEDIA_KIND)
+            ?.let { runCatching { MediaKind.valueOf(it) }.getOrNull() }
+            ?: MediaKind.SONG
         return NowPlayingItem(
             uid = QueueUid(item.mediaId),
             trackId = TrackId(md.extras?.getString(PodiumExtras.TRACK_ID) ?: "unknown|${item.mediaId}"),
@@ -238,25 +254,28 @@ class MediaControllerPlaybackController(
             artistDisplay = md.artist?.toString().orEmpty(),
             albumTitle = md.albumTitle?.toString(),
             artworkUri = md.artworkUri?.toString(),
-            durationMs = md.durationMs,
+            durationMs = resolvePlaybackDurationMs(md.durationMs, playerDurationMs, kind == MediaKind.LIVE),
             indexInQueue = index,
             queueSize = size,
             servedByDisplayName = extras?.getString(PodiumExtras.SERVED_BY),
             resolutionPath = extras?.getString(PodiumExtras.RESOLUTION_PATH)?.let { runCatching { ResolutionPath.valueOf(it) }.getOrNull() },
             servedBy = extras?.getString(PodiumExtras.SERVED_BY_ID)?.takeIf { it.isNotBlank() }?.let(::SourceId),
-            kind = md.extras?.getString(PodiumExtras.MEDIA_KIND)?.let { runCatching { MediaKind.valueOf(it) }.getOrNull() } ?: MediaKind.SONG,
+            kind = kind,
         )
     }
 
-    private fun toEntry(item: MediaItem, isCurrent: Boolean): QueueEntry {
+    private fun toEntry(item: MediaItem, isCurrent: Boolean, playerDurationMs: Long): QueueEntry {
         val md = item.mediaMetadata
+        val kind = md.extras?.getString(PodiumExtras.MEDIA_KIND)
+            ?.let { runCatching { MediaKind.valueOf(it) }.getOrNull() }
+            ?: MediaKind.SONG
         return QueueEntry(
             uid = QueueUid(item.mediaId),
             trackId = TrackId(md.extras?.getString(PodiumExtras.TRACK_ID) ?: "unknown|${item.mediaId}"),
             title = md.title?.toString().orEmpty(),
             artistDisplay = md.artist?.toString().orEmpty(),
             artworkUri = md.artworkUri?.toString(),
-            durationMs = md.durationMs,
+            durationMs = if (isCurrent) resolvePlaybackDurationMs(md.durationMs, playerDurationMs, kind == MediaKind.LIVE) else md.durationMs,
             origin = md.extras?.getString(PodiumExtras.ORIGIN)?.let { runCatching { QueueOrigin.valueOf(it) }.getOrNull() }
                 ?: QueueOrigin.CONTEXT,
             isCurrent = isCurrent,
@@ -292,4 +311,19 @@ class MediaControllerPlaybackController(
     private companion object {
         const val TAG = "PodiumController"
     }
+}
+
+/**
+ * Resolves the track duration shown by the UI, falling back to ExoPlayer's measured duration when
+ * the initial queue metadata omits length (e.g., YouTube Music Home / Quick Picks cards).
+ * Live radio streams keep null duration because ExoPlayer reports only the rewind window (D-90).
+ */
+internal fun resolvePlaybackDurationMs(
+    metadataDurationMs: Long?,
+    playerDurationMs: Long,
+    isLive: Boolean,
+): Long? {
+    if (isLive) return null
+    metadataDurationMs?.takeIf { it > 0L }?.let { return it }
+    return playerDurationMs.takeIf { it != C.TIME_UNSET && it > 0L }
 }

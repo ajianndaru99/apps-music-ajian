@@ -13,6 +13,7 @@ import app.podium.core.designsystem.theme.VirtualDisplay
 import app.podium.core.designsystem.type.DisplayFont
 import app.podium.core.designsystem.type.LyricsFont
 import app.podium.core.interaction.HapticProfile
+import app.podium.feature.settings.AiExploreProvider
 import app.podium.feature.settings.DeviceSettingsRepository
 import app.podium.player.api.AudioEffects
 import app.podium.player.api.EqualizerPreset
@@ -156,6 +157,28 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         prefs.edit { putBoolean(KEY_PRE_CACHE_NEXT, enabled) }
     }
 
+    private val _aiExploreProvider = MutableStateFlow(
+        enumOf(prefs.getString(KEY_AI_EXPLORE_PROVIDER, null), AiExploreProvider.GEMINI),
+    )
+    override val aiExploreProvider: StateFlow<AiExploreProvider> = _aiExploreProvider.asStateFlow()
+
+    override fun setAiExploreProvider(provider: AiExploreProvider) {
+        _aiExploreProvider.value = provider
+        prefs.edit { putString(KEY_AI_EXPLORE_PROVIDER, provider.name) }
+    }
+
+    private val _aiExploreApiKey = MutableStateFlow(prefs.getString(KEY_AI_EXPLORE_API_KEY, "").orEmpty())
+    override val aiExploreApiKey: StateFlow<String> = _aiExploreApiKey.asStateFlow()
+
+    override fun setAiExploreApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        _aiExploreApiKey.value = cleaned
+        prefs.edit {
+            if (cleaned.isEmpty()) remove(KEY_AI_EXPLORE_API_KEY)
+            else putString(KEY_AI_EXPLORE_API_KEY, cleaned)
+        }
+    }
+
     override fun setAutoplay(enabled: Boolean) {
         _autoplay.value = enabled
         prefs.edit { putBoolean(KEY_AUTOPLAY, enabled) }
@@ -267,6 +290,8 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         const val KEY_FINISH = "finish"
         const val KEY_USE_YTM_UI = "use_ytm_ui"
         const val KEY_PRE_CACHE_NEXT = "pre_cache_next"
+        const val KEY_AI_EXPLORE_PROVIDER = "ai_explore_provider"
+        const val KEY_AI_EXPLORE_API_KEY = "ai_explore_api_key"
         const val KEY_CUSTOM = "custom_argb"
         const val KEY_GRAIN = "grain"
         const val KEY_SOUND = "startup_sound"

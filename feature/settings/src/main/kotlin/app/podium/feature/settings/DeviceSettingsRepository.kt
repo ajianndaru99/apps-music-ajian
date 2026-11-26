@@ -106,6 +106,16 @@ interface DeviceSettingsRepository {
 
     fun setPreCacheNext(enabled: Boolean) {}
 
+    /** AI Explore provider (free tier BYOK stored locally on device). */
+    val aiExploreProvider: StateFlow<AiExploreProvider> get() = DefaultAiProvider
+
+    fun setAiExploreProvider(provider: AiExploreProvider) {}
+
+    /** User-supplied AI Free Tier API key, kept strictly on-device. */
+    val aiExploreApiKey: StateFlow<String> get() = EmptyString
+
+    fun setAiExploreApiKey(apiKey: String) {}
+
     fun setAppearance(appearance: DeviceAppearance)
     fun setPreview(appearance: DeviceAppearance?)
     fun setStartupSound(enabled: Boolean)
@@ -116,5 +126,12 @@ interface DeviceSettingsRepository {
     fun setAvoidRepeats(enabled: Boolean)
 }
 
+enum class AiExploreProvider(val label: String, val defaultModel: String) {
+    GEMINI("Google Gemini (Free Tier)", "gemini-2.5-flash-lite"),
+    GROQ("Groq (Free Tier)", "llama-3.3-70b-versatile"),
+}
+
 private val Off: StateFlow<Boolean> = MutableStateFlow(false)
 private val On: StateFlow<Boolean> = MutableStateFlow(true)
+private val DefaultAiProvider: StateFlow<AiExploreProvider> = MutableStateFlow(AiExploreProvider.GEMINI)
+private val EmptyString: StateFlow<String> = MutableStateFlow("")

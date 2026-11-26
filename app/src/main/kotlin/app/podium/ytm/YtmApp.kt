@@ -135,7 +135,8 @@ fun YtmApp(
                         YtmRoute.Explore -> YtmExploreScreen(
                             graph = graph,
                             actions = actions,
-                            onOpenGenre = { genre -> tabState.navigate(YtmRoute.Genre(genre)) },
+                            onOpenGenre = { genre, query -> tabState.navigate(YtmRoute.Genre(genre, query)) },
+                            onOpenSettings = { tabState.navigate(YtmRoute.Settings) },
                         )
                         YtmRoute.Library -> YtmLibraryScreen(
                             graph = graph,
@@ -170,6 +171,7 @@ fun YtmApp(
                         )
                         is YtmRoute.Genre -> YtmGenreScreen(
                             genre = route.name,
+                            searchQuery = route.query,
                             graph = graph,
                             actions = actions,
                             onBack = { tabState.pop() },

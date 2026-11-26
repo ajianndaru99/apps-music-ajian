@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -218,11 +219,14 @@ fun YtmNowPlayingSheet(
                     val durationMs = item.durationMs ?: 0L
                     var isDragging by remember(item.uid) { mutableStateOf(false) }
                     var sliderPos by remember(item.uid) { mutableFloatStateOf(0f) }
+                    var positionMs by remember(item.uid) { mutableLongStateOf(0L) }
 
-                    LaunchedEffect(item.uid, isPlaying, isDragging) {
+                    LaunchedEffect(item.uid, durationMs, isPlaying, isDragging) {
                         while (isActive && !isDragging) {
+                            val currentPos = controller.positionMs().coerceAtLeast(0L)
+                            positionMs = currentPos
                             sliderPos = if (durationMs > 0L) {
-                                (controller.positionMs().toFloat() / durationMs).coerceIn(0f, 1f)
+                                (currentPos.toFloat() / durationMs).coerceIn(0f, 1f)
                             } else 0f
                             delay(if (isPlaying) 250L else 800L)
                         }
@@ -237,7 +241,9 @@ fun YtmNowPlayingSheet(
                             },
                             onValueChangeFinished = {
                                 if (durationMs > 0L && snapshot.controls.seek) {
-                                    controller.seekTo((sliderPos * durationMs).toLong())
+                                    val targetMs = (sliderPos * durationMs).toLong()
+                                    positionMs = targetMs
+                                    controller.seekTo(targetMs)
                                 }
                                 isDragging = false
                             },
@@ -252,8 +258,11 @@ fun YtmNowPlayingSheet(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
+                            val displayPosMs = if (isDragging && durationMs > 0L) {
+                                (sliderPos * durationMs).toLong()
+                            } else positionMs
                             Text(
-                                text = formatDurationMs((sliderPos * durationMs).toLong()),
+                                text = formatDurationMs(displayPosMs),
                                 style = YtmTheme.type.labelSmall,
                                 color = colors.onSurfaceVariant,
                             )

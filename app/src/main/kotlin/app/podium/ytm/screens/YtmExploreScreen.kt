@@ -12,21 +12,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,40 +49,74 @@ import app.podium.core.common.Outcome
 import app.podium.core.model.Track
 import app.podium.feature.online.OnlineActions
 import app.podium.ytm.YtmSectionHeader
+import app.podium.ytm.YtmSquareCard
 import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
+import app.podium.ytm.explore.ExploreBlueprint
+import app.podium.ytm.explore.ExploreBlueprintSource
+import app.podium.ytm.explore.ExploreCuratedShelf
+import app.podium.ytm.explore.ExploreGenreCard
 import kotlin.math.abs
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 @Composable
 fun YtmExploreScreen(
     graph: AppGraph,
     actions: OnlineActions,
-    onOpenGenre: (String) -> Unit,
+    onOpenGenre: (name: String, query: String) -> Unit,
+    onOpenSettings: () -> Unit = {},
 ) {
     val colors = YtmTheme.colors
     val status by graph.online.status.collectAsStateWithLifecycle()
+    val accountKey by graph.online.accountKey.collectAsStateWithLifecycle()
+    val aiApiKey by graph.deviceSettings.aiExploreApiKey.collectAsStateWithLifecycle()
+    val aiProvider by graph.deviceSettings.aiExploreProvider.collectAsStateWithLifecycle()
     val snapshot by graph.playbackController.snapshot.collectAsStateWithLifecycle()
     val likedIds by graph.favorites.favorites.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
 
-    var genres by remember { mutableStateOf<List<String>>(emptyList()) }
+    var blueprint by remember { mutableStateOf<ExploreBlueprint?>(null) }
+    var nativeGenres by remember { mutableStateOf<List<String>>(emptyList()) }
+    var shelfTracks by remember { mutableStateOf<Map<String, List<Track>>>(emptyMap()) }
     var liveGenres by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedLiveGenre by remember { mutableStateOf<String?>(null) }
     var liveStations by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        loading = true
-        val genresOutcome = graph.online.genres()
-        if (genresOutcome is Outcome.Success) {
-            genres = genresOutcome.value
+    suspend fun loadAll(forceRefresh: Boolean) {
+        val loadedBlueprint = graph.aiExplore.loadExplore(forceRefresh = forceRefresh)
+        blueprint = loadedBlueprint
+
+        val nativeResult = graph.online.genres()
+        if (nativeResult is Outcome.Success) {
+            nativeGenres = nativeResult.value
         }
-        if (status?.canLiveRadio == true) {
+
+        val resolvedShelves = coroutineScope {
+            loadedBlueprint.shelves.map { shelf ->
+                async {
+                    shelf.title to graph.aiExplore.searchTracksForQuery(shelf.query, limit = 8)
+                }
+            }.awaitAll().toMap()
+        }
+        shelfTracks = resolvedShelves
+
+        if (status?.canLiveRadio == true && liveGenres.isEmpty()) {
             val liveOutcome = graph.online.liveGenres()
             if (liveOutcome is Outcome.Success) {
                 liveGenres = liveOutcome.value
                 selectedLiveGenre = liveOutcome.value.firstOrNull()
             }
         }
+    }
+
+    LaunchedEffect(accountKey, aiApiKey, aiProvider) {
+        loading = true
+        loadAll(forceRefresh = false)
         loading = false
     }
 
@@ -86,13 +128,22 @@ fun YtmExploreScreen(
         }
     }
 
+    val combinedGenres = remember(blueprint, nativeGenres) {
+        val fromBlueprint = blueprint?.genres.orEmpty()
+        val existing = fromBlueprint.map { it.title.lowercase() }.toSet()
+        val extra = nativeGenres
+            .filter { it.lowercase() !in existing }
+            .map { ExploreGenreCard(title = it, query = it) }
+        fromBlueprint + extra
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background),
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
-        if (loading) {
+        if (loading && blueprint == null) {
             item(key = "loading") {
                 Box(
                     modifier = Modifier
@@ -105,52 +156,119 @@ fun YtmExploreScreen(
             }
         }
 
-        if (genres.isNotEmpty()) {
+        blueprint?.let { bp ->
+            item(key = "explore_banner") {
+                AiExploreHeaderCard(
+                    blueprint = bp,
+                    hasApiKey = aiApiKey.isNotBlank(),
+                    refreshing = refreshing,
+                    onRefresh = {
+                        if (!refreshing) {
+                            scope.launch {
+                                refreshing = true
+                                loadAll(forceRefresh = true)
+                                refreshing = false
+                            }
+                        }
+                    },
+                    onOpenSettings = onOpenSettings,
+                )
+            }
+        }
+
+        if (combinedGenres.isNotEmpty()) {
             item(key = "genres_header") {
                 YtmSectionHeader(title = "Moods & genres")
             }
 
-            val rows = genres.chunked(2)
-            items(rows, key = { it.joinToString("_") }) { pair ->
+            val rows = combinedGenres.chunked(2)
+            items(rows, key = { pair -> pair.joinToString("_") { it.title } }) { pair ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 5.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    pair.forEach { genre ->
-                        val accent = remember(genre) {
-                            val hue = (abs(genre.hashCode()) % 360).toFloat()
+                    pair.forEach { card ->
+                        val accent = remember(card.title) {
+                            val hue = (abs(card.title.hashCode()) % 360).toFloat()
                             Color.hsl(hue, 0.55f, 0.55f)
                         }
                         Row(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(52.dp)
+                                .height(56.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(colors.surfaceVariant)
-                                .clickable { onOpenGenre(genre) },
+                                .clickable { onOpenGenre(card.title, card.query) },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Box(
                                 modifier = Modifier
                                     .width(6.dp)
-                                    .height(52.dp)
+                                    .height(56.dp)
                                     .background(accent),
                             )
                             Spacer(Modifier.width(12.dp))
-                            Text(
-                                text = genre,
-                                style = YtmTheme.type.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = colors.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(end = 10.dp),
-                            )
+                            Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                                Text(
+                                    text = card.title,
+                                    style = YtmTheme.type.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = colors.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                card.badge?.let { badge ->
+                                    Text(
+                                        text = badge,
+                                        style = YtmTheme.type.labelSmall,
+                                        color = colors.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                         }
                     }
                     if (pair.size == 1) {
                         Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        blueprint?.shelves?.forEach { shelf: ExploreCuratedShelf ->
+            val tracks = shelfTracks[shelf.title].orEmpty()
+            if (tracks.isNotEmpty()) {
+                item(key = "shelf_header_${shelf.title}") {
+                    Spacer(Modifier.height(8.dp))
+                    YtmSectionHeader(
+                        title = shelf.title,
+                        actionLabel = "Play all",
+                        onAction = { actions.play(tracks, 0, shelf.title) },
+                    )
+                    if (shelf.subtitle.isNotBlank()) {
+                        Text(
+                            text = shelf.subtitle,
+                            style = YtmTheme.type.labelMedium,
+                            color = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+                        )
+                    }
+                }
+                item(key = "shelf_row_${shelf.title}") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        itemsIndexed(tracks, key = { idx, t -> "${shelf.title}_${idx}_${t.id.value}" }) { index, track ->
+                            YtmSquareCard(
+                                title = track.title,
+                                subtitle = track.artistDisplay,
+                                artworkUri = track.artwork?.uri,
+                                onClick = { actions.play(tracks, index, shelf.title) },
+                            )
+                        }
                     }
                 }
             }
@@ -201,6 +319,108 @@ fun YtmExploreScreen(
                     isLiked = station.id in likedIds,
                     onClick = { actions.playAlone(station) },
                     onToggleLike = { graph.favorites.toggle(station.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiExploreHeaderCard(
+    blueprint: ExploreBlueprint,
+    hasApiKey: Boolean,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val colors = YtmTheme.colors
+    val sourceLabel = when (blueprint.source) {
+        ExploreBlueprintSource.AI_GEMINI -> "AI Curated • Gemini Free Tier (24h Cache)"
+        ExploreBlueprintSource.AI_GROQ -> "AI Curated • Groq Free Tier (24h Cache)"
+        ExploreBlueprintSource.LOCAL_FALLBACK -> "Smart Explore • Local Taste & Trends"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surfaceVariant)
+            .padding(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AutoAwesome,
+                    contentDescription = null,
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = sourceLabel,
+                    style = YtmTheme.type.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (refreshing) {
+                CircularProgressIndicator(
+                    color = colors.onSurface,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(20.dp),
+                )
+            } else {
+                IconButton(
+                    onClick = onRefresh,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Refresh Explore",
+                        tint = colors.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = blueprint.profileSummary,
+            style = YtmTheme.type.bodyMedium,
+            color = colors.onSurfaceVariant,
+        )
+        blueprint.statusNote?.let { note ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = note,
+                style = YtmTheme.type.labelSmall,
+                color = colors.onSurfaceMuted,
+            )
+        }
+        if (!hasApiKey) {
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = onOpenSettings,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.accent,
+                    contentColor = colors.background,
+                ),
+                shape = RoundedCornerShape(50),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = "Add Free AI Key",
+                    color = colors.background,
+                    style = YtmTheme.type.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                 )
             }
         }

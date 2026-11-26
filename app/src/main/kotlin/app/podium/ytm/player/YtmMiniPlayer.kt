@@ -53,10 +53,10 @@ fun YtmMiniPlayer(
     val isLiked = item.trackId in likedIds
     val isPlaying = snapshot.intent == PlayIntent.PLAY
 
+    val dur = item.durationMs ?: 0L
     var progress by remember(item.uid) { mutableFloatStateOf(0f) }
-    LaunchedEffect(item.uid, isPlaying) {
+    LaunchedEffect(item.uid, dur, isPlaying) {
         while (isActive) {
-            val dur = item.durationMs ?: 0L
             progress = if (dur > 0L) (controller.positionMs().toFloat() / dur).coerceIn(0f, 1f) else 0f
             delay(if (isPlaying) 400L else 1000L)
         }
