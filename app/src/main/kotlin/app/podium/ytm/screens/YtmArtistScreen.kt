@@ -53,6 +53,7 @@ import app.podium.ytm.YtmSectionHeader
 import app.podium.ytm.YtmSquareCard
 import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
+import app.podium.ytm.openAlbumAction
 
 @Composable
 fun YtmArtistScreen(
@@ -220,10 +221,7 @@ fun YtmArtistScreen(
                                 { actions.startRadio(track) }
                             } else null,
                             onToggleLike = { graph.favorites.toggle(track.id) },
-                            onOpenAlbum = track.album?.id?.let { albumId ->
-                                val albumTitle = track.album?.title.orEmpty()
-                                { onOpenCollection(PlaylistId(albumId.value), albumTitle) }
-                            },
+                            onOpenAlbum = track.openAlbumAction(onOpenCollection),
                         )
                     }
                 }

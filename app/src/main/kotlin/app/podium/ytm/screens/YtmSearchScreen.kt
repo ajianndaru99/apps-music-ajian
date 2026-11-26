@@ -54,6 +54,8 @@ import app.podium.ytm.YtmArtworkImage
 import app.podium.ytm.YtmSectionHeader
 import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
+import app.podium.ytm.openAlbumAction
+import app.podium.ytm.openArtistAction
 import kotlinx.coroutines.delay
 
 @Composable
@@ -209,14 +211,8 @@ fun YtmSearchScreen(
                                 { actions.startRadio(track) }
                             } else null,
                             onToggleLike = { graph.favorites.toggle(track.id) },
-                            onOpenArtist = track.primaryArtists.firstOrNull()?.id?.let { id ->
-                                val name = track.primaryArtists.first().name
-                                { onOpenArtist(id, name) }
-                            },
-                            onOpenAlbum = track.album?.id?.let { id ->
-                                val title = track.album?.title.orEmpty()
-                                { onOpenCollection(PlaylistId(id.value), title) }
-                            },
+                            onOpenArtist = track.openArtistAction(onOpenArtist),
+                            onOpenAlbum = track.openAlbumAction(onOpenCollection),
                         )
                     }
                 }

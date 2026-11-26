@@ -48,6 +48,7 @@ import app.podium.sources.api.PlaylistDetail
 import app.podium.ytm.YtmArtworkImage
 import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
+import app.podium.ytm.openArtistAction
 
 @Composable
 fun YtmCollectionScreen(
@@ -223,10 +224,7 @@ fun YtmCollectionScreen(
                             { actions.startRadio(track) }
                         } else null,
                         onToggleLike = { graph.favorites.toggle(track.id) },
-                        onOpenArtist = track.primaryArtists.firstOrNull()?.id?.let { artistId ->
-                            val artistName = track.primaryArtists.first().name
-                            { onOpenArtist(artistId, artistName) }
-                        },
+                        onOpenArtist = track.openArtistAction(onOpenArtist),
                     )
                 }
             }

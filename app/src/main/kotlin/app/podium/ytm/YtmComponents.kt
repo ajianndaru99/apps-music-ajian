@@ -55,6 +55,7 @@ import app.podium.AppGraph
 import app.podium.core.common.Outcome
 import app.podium.core.designsystem.artwork.ArtworkState
 import app.podium.core.designsystem.artwork.rememberArtworkState
+import app.podium.core.model.ArtistId
 import app.podium.core.model.PlaylistId
 import app.podium.core.model.Track
 import app.podium.feature.online.OnlineActions
@@ -541,6 +542,18 @@ fun rememberYtmOnlineActions(
             override val nowPlaying = kotlinx.coroutines.flow.MutableStateFlow<Track?>(null)
         }
     }
+}
+
+fun Track.openArtistAction(onOpenArtist: (ArtistId, String) -> Unit): (() -> Unit)? {
+    val artist = primaryArtists.firstOrNull() ?: return null
+    val id = artist.id ?: return null
+    return { onOpenArtist(id, artist.name) }
+}
+
+fun Track.openAlbumAction(onOpenCollection: (PlaylistId, String) -> Unit): (() -> Unit)? {
+    val albumRef = album ?: return null
+    val id = albumRef.id ?: return null
+    return { onOpenCollection(PlaylistId(id.value), albumRef.title) }
 }
 
 fun formatDurationMs(ms: Long): String {
