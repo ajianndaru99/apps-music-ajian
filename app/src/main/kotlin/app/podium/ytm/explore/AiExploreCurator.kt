@@ -363,8 +363,11 @@ class AiExploreCurator internal constructor(
                     if (!discovered) {
                         discovered = true
                         val liveModels = discoverModels(provider, apiKey)
-                        liveModels.forEach { m ->
-                            if (m !in candidates) candidates.add(m)
+                        if (liveModels.isNotEmpty()) {
+                            val alreadyTried = candidates.subList(0, idx).toSet()
+                            val tail = candidates.subList(idx, candidates.size).toList()
+                            candidates.subList(idx, candidates.size).clear()
+                            candidates.addAll((liveModels + tail).filter { it !in alreadyTried }.distinct())
                         }
                     }
                     lastOutcome = AiCallOutcome.Failed("HTTP 404 ($model)")
@@ -751,7 +754,7 @@ class AiExploreCurator internal constructor(
         const val MANUAL_REFRESH_COOLDOWN_MS = 30_000L
         const val RATE_LIMIT_BACKOFF_MS = 24L * 60 * 60 * 1000
         const val MAX_AI_CALLS_PER_DAY = 5
-        private const val MAX_MODEL_CANDIDATES_PER_REQUEST = 5
+        private const val MAX_MODEL_CANDIDATES_PER_REQUEST = 8
 
         fun defaultModelCandidates(provider: AiExploreProvider): List<String> = when (provider) {
             AiExploreProvider.GEMINI -> listOf(
