@@ -35,10 +35,8 @@ jobs:
       - name: Run unit tests
         run: |
           set -o pipefail
-          ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:testDebugUnitTest :sources:api:testDebugUnitTest --no-daemon 2>&1 | tee test_out.log || {
-            grep -E "(^e: |FAILED|AssertionError|Error:|Exception|Unresolved)" test_out.log | head -n 30 | while IFS= read -r line; do
-              echo "::error::$line"
-            done
+          ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:testDebugUnitTest :sources:api:testDebugUnitTest --no-daemon --console=plain 2>&1 | tee test_out.log || {
+            awk '/\* What went wrong:|e: file:|> Task .* FAILED/{flag=1} flag && NF {print "::error::" $0}' test_out.log | head -n 9
             exit 1
           }
 
