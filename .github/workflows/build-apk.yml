@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -38,3 +41,13 @@ jobs:
           name: podium-ytm-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish APK to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest-debug --yes || true
+          gh release create latest-debug app/build/outputs/apk/debug/app-debug.apk \
+            --title "Podium YTM Debug APK" \
+            --notes "Latest automated build (${{ github.sha }})" \
+            --latest
