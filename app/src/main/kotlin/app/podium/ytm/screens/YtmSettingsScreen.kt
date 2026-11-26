@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.podium.AppGraph
+import app.podium.BuildConfig
 import app.podium.feature.settings.ServiceAccount
 import app.podium.ytm.YtmGoogleSignInButton
 import app.podium.ytm.YtmTheme
@@ -62,6 +63,7 @@ fun YtmSettingsScreen(
     val onlineRecs by graph.deviceSettings.onlineRecommendations.collectAsStateWithLifecycle()
     val avoidRepeats by graph.deviceSettings.avoidRepeats.collectAsStateWithLifecycle()
     val preCacheNext by graph.deviceSettings.preCacheNext.collectAsStateWithLifecycle()
+    val autoUpdate by graph.updates.automatic.collectAsStateWithLifecycle()
     var cacheBytes by remember { mutableLongStateOf(graph.streamCache.cacheSizeBytes()) }
     val scope = rememberCoroutineScope()
 
@@ -302,6 +304,51 @@ fun YtmSettingsScreen(
                             shape = RoundedCornerShape(50),
                         ) {
                             Text("Clear")
+                        }
+                    }
+                }
+            }
+
+            item(key = "app_updates") {
+                HorizontalDivider(color = colors.divider)
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text(
+                        text = "App Updates",
+                        style = YtmTheme.type.labelMedium,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                    SettingsToggleRow(
+                        title = "Auto-check for updates",
+                        subtitle = "Automatically notify when a new version is available",
+                        checked = autoUpdate,
+                        onCheckedChange = { graph.updates.setAutomatic(it) },
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                text = "Current version",
+                                style = YtmTheme.type.titleMedium,
+                                color = colors.onSurface,
+                            )
+                            Text(
+                                text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                                style = YtmTheme.type.bodyMedium,
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { graph.updates.checkNow() },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text("Check now")
                         }
                     }
                 }

@@ -35,15 +35,74 @@ jobs:
       - name: Run unit tests
         run: |
           set -o pipefail
-          ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:test :sources:api:test --no-daemon --console=plain 2>&1 | tee test_out.log || {
-            for f in player/service/build/test-results/testDebugUnitTest/TEST-*.xml; do
+          ./gradlew :app:testDebugUnitTest :player:service:testDebugUnitTest :sources:youtubemusic:test :sources:api:test --no-daemon --console=plain 2>&1 | tee test_out.log || {
+            for f in app/build/test-results/testDebugUnitTest/TEST-*.xml player/service/build/test-results/testDebugUnitTest/TEST-*.xml; do
               [ -f "$f" ] && grep -qE 'failures="[1-9]|errors="[1-9]' "$f" && echo "::error::$(basename "$f"): $(grep -m1 -E '<failure|<error|message=' "$f" | tr '\n' ' ' | cut -c1-300)"
             done
             awk '/\* What went wrong:|e: file:|> Task .* FAILED/{flag=1} flag && NF {print "::error::" $0}' test_out.log | head -n 5
             exit 1
           }
 
-      - name: Build Debug APK
+      - name: Check release signing secrets
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.PODIUM_KEYSTORE_BASE64 }}
+          KEYSTORE_PW: ${{ secrets.PODIUM_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PODIUM_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PW" ] && [ -n "$KEY_ALIAS" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Signed Release APK
+        if: steps.signing.outputs.enabled == 'true'
+        id: build_release
+        env:
+          PODIUM_KEYSTORE_BASE64: ${{ secrets.PODIUM_KEYSTORE_BASE64 }}
+          PODIUM_KEYSTORE_PASSWORD: ${{ secrets.PODIUM_KEYSTORE_PASSWORD }}
+          PODIUM_KEY_ALIAS: ${{ secrets.PODIUM_KEY_ALIAS }}
+          PODIUM_KEY_PASSWORD: ${{ secrets.PODIUM_KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          KEYSTORE_PATH="${{ runner.temp }}/release.keystore"
+          printf '%s' "$PODIUM_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_PATH"
+          export PODIUM_KEYSTORE_FILE="$KEYSTORE_PATH"
+          VERSION_CODE=$((100 + ${{ github.run_number }}))
+          VERSION_NAME="0.1.6.${{ github.run_number }}"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          ./gradlew :app:assembleRelease --no-daemon -Ppodium.abi=arm64-v8a -Ppodium.versionCode="$VERSION_CODE" -Ppodium.versionName="$VERSION_NAME" --console=plain 2>&1 | tee build_out.log || {
+            awk '/\* What went wrong:|e: file:|> Task .* FAILED/{flag=1} flag && NF {print "::error::" $0}' build_out.log | head -n 9
+            rm -f "$KEYSTORE_PATH"
+            exit 1
+          }
+          cp app/build/outputs/apk/release/app-release.apk "${{ runner.temp }}/ajian-music.apk"
+          rm -f "$KEYSTORE_PATH"
+
+      - name: Upload Signed Release APK
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ajian-music-release-apk
+          path: ${{ runner.temp }}/ajian-music.apk
+          if-no-files-found: error
+
+      - name: Publish Signed Release to GitHub Releases
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_NAME: ${{ steps.build_release.outputs.version_name }}
+        run: |
+          TAG="v${VERSION_NAME}"
+          gh release delete "$TAG" --yes || true
+          gh release create "$TAG" "${{ runner.temp }}/ajian-music.apk" \
+            --title "Ajian Music ${TAG}" \
+            --notes "Ajian Music ${TAG} (${{ github.sha }})" \
+            --latest
+
+      - name: Build Debug APK (unsigned fallback)
+        if: steps.signing.outputs.enabled != 'true'
         run: |
           set -o pipefail
           ./gradlew :app:assembleDebug --no-daemon -Ppodium.minifyDebug=true -Ppodium.abi=arm64-v8a --console=plain 2>&1 | tee build_out.log || {
@@ -52,18 +111,20 @@ jobs:
           }
 
       - name: Upload Debug APK
+        if: steps.signing.outputs.enabled != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: podium-ytm-debug-apk
+          name: ajian-music-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      - name: Publish APK to GitHub Releases
+      - name: Publish Debug APK to GitHub Releases
+        if: steps.signing.outputs.enabled != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete latest-debug --yes || true
           gh release create latest-debug app/build/outputs/apk/debug/app-debug.apk \
-            --title "Podium YTM Debug APK" \
-            --notes "Latest automated build (${{ github.sha }})" \
-            --latest
+            --title "Ajian Music Debug APK" \
+            --notes "Latest automated debug build (${{ github.sha }}). Configure release keystore secrets to publish auto-updatable signed releases." \
+            --prerelease

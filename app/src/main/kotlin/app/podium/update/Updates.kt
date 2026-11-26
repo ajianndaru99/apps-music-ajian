@@ -303,7 +303,7 @@ internal class UpdateCenter(
     }
 
     companion object {
-        const val REPOSITORY = "GHOSTxASR/podium-music-player"
+        const val REPOSITORY = "ajianndaru99/apps-music-ajian"
         const val LATEST_URL = "https://api.github.com/repos/$REPOSITORY/releases/latest"
         const val RELEASES_PAGE = "https://github.com/$REPOSITORY/releases/latest"
 

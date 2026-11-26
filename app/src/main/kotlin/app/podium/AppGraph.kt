@@ -125,13 +125,13 @@ class AppGraph(val context: Context) {
      * builds check by themselves; debug builds (another package) only open the release's page.
      */
     internal val updates = app.podium.update.UpdateCenter(
-        net = app.podium.update.HttpsUpdateNet("Podium/${BuildConfig.VERSION_NAME} (update check)"),
+        net = app.podium.update.HttpsUpdateNet("AjianMusic/${BuildConfig.VERSION_NAME} (update check)"),
         store = app.podium.update.PrefsUpdateStore(context),
         installer = app.podium.update.PackageUpdateInstaller(context),
         current = app.podium.update.Version.of(BuildConfig.VERSION_NAME) ?: app.podium.update.Version(listOf(0), "0"),
         downloads = java.io.File(context.cacheDir, "updates"),
         scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
-        checksByItself = !BuildConfig.DEBUG,
+        checksByItself = true,
         canInstallReleases = !BuildConfig.DEBUG,
     )
 

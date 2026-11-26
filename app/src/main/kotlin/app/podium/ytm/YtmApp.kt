@@ -39,6 +39,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +89,10 @@ fun YtmApp(
         )
 
         val snapshot by graph.playbackController.snapshot.collectAsStateWithLifecycle()
+
+        LaunchedEffect(Unit) {
+            graph.updates.autoCheck()
+        }
 
         BackHandler(enabled = nowPlayingOpen || !tabState.isAtTabRoot || tabState.currentTab != YtmTab.HOME) {
             if (nowPlayingOpen) {
@@ -205,6 +210,8 @@ fun YtmApp(
                     onDismiss = { nowPlayingOpen = false },
                 )
             }
+
+            YtmUpdateDialog(graph.updates)
         }
     }
 }
