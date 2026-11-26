@@ -33,7 +33,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run unit tests
-        run: ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:testDebugUnitTest :sources:api:testDebugUnitTest --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:testDebugUnitTest :sources:api:testDebugUnitTest --no-daemon 2>&1 | tee test_out.log || {
+            grep -E "(^e: |FAILED|AssertionError|Error:|Exception|Unresolved)" test_out.log | head -n 30 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          }
 
       - name: Build Debug APK
         run: ./gradlew :app:assembleDebug --no-daemon -Ppodium.minifyDebug=true -Ppodium.abi=arm64-v8a
