@@ -235,7 +235,7 @@ internal fun YtmUpdateDialog(updates: UpdateCenter) {
                 textContentColor = colors.onSurfaceVariant,
                 title = { Text("Permission needed", style = YtmTheme.type.titleLarge) },
                 text = {
-                    Text("Allow installing updates from Ajian Music in Android settings, then return here to complete the update.")
+                    Text("Allow installing updates from Music in Android settings, then return here to complete the update.")
                 },
                 confirmButton = {
                     Button(

@@ -295,6 +295,11 @@ class AppGraph(val context: Context) {
         )
     }
 
+    /** Playable Top 50 YouTube Music and Spotify Hits chart playlists for Home. */
+    val charts by lazy {
+        app.podium.ytm.explore.YtmChartsCurator(online)
+    }
+
     /**
      * Debug builds: lyrics answered on the device instead of by the service (device tests of the lyric
      * screen with the generated test tones and invented words, never the listener's own songs).

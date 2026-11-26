@@ -135,7 +135,7 @@ class WebSignInActivity : ComponentActivity() {
                         )
                     }
                     PodiumText(
-                        "You sign in on the service's own page. Podium never sees your password.",
+                        "You sign in on the service's own page. Music never sees your password.",
                         type.caption,
                         colors.labelSecondary,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),

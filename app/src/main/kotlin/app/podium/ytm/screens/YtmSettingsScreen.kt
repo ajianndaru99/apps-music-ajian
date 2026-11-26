@@ -74,12 +74,16 @@ fun YtmSettingsScreen(
     val preCacheNext by graph.deviceSettings.preCacheNext.collectAsStateWithLifecycle()
     val aiProvider by graph.deviceSettings.aiExploreProvider.collectAsStateWithLifecycle()
     val savedAiKey by graph.deviceSettings.aiExploreApiKey.collectAsStateWithLifecycle()
+    val aiBackupProvider by graph.deviceSettings.aiExploreBackupProvider.collectAsStateWithLifecycle()
+    val savedAiBackupKey by graph.deviceSettings.aiExploreBackupApiKey.collectAsStateWithLifecycle()
     val autoUpdate by graph.updates.automatic.collectAsStateWithLifecycle()
     var cacheBytes by remember { mutableLongStateOf(graph.streamCache.cacheSizeBytes()) }
     var aiKeyDraft by remember(savedAiKey) { mutableStateOf(savedAiKey) }
     var revealAiKey by remember { mutableStateOf(false) }
+    var aiBackupKeyDraft by remember(savedAiBackupKey) { mutableStateOf(savedAiBackupKey) }
+    var revealBackupKey by remember { mutableStateOf(false) }
     var aiQuota by remember { mutableStateOf(graph.aiExplore.quotaStatus()) }
-    LaunchedEffect(savedAiKey, aiProvider) {
+    LaunchedEffect(savedAiKey, aiProvider, savedAiBackupKey, aiBackupProvider) {
         aiQuota = graph.aiExplore.quotaStatus()
     }
     val scope = rememberCoroutineScope()
@@ -446,6 +450,101 @@ fun YtmSettingsScreen(
                         style = YtmTheme.type.labelSmall,
                         color = colors.onSurfaceMuted,
                     )
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = "Backup AI Key (Optional • Weekend Failover)",
+                        style = YtmTheme.type.labelMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AiExploreProvider.entries.forEach { provider ->
+                            val selected = aiBackupProvider == provider
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (selected) colors.chipSelectedBg else colors.chipUnselectedBg)
+                                    .clickable { graph.deviceSettings.setAiExploreBackupProvider(provider) }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    text = if (provider == AiExploreProvider.GEMINI) "Gemini Flash-Lite" else "Groq Llama-3.3",
+                                    style = YtmTheme.type.labelMedium.copy(
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                    ),
+                                    color = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = aiBackupKeyDraft,
+                        onValueChange = { aiBackupKeyDraft = it },
+                        singleLine = true,
+                        label = {
+                            Text(
+                                if (aiBackupProvider == AiExploreProvider.GEMINI) {
+                                    "Backup Gemini Key"
+                                } else {
+                                    "Backup Groq Key (console.groq.com)"
+                                },
+                            )
+                        },
+                        visualTransformation = if (revealBackupKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { revealBackupKey = !revealBackupKey }) {
+                                Icon(
+                                    imageVector = if (revealBackupKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    contentDescription = if (revealBackupKey) "Hide key" else "Show key",
+                                    tint = colors.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = colors.onSurface,
+                            unfocusedTextColor = colors.onSurface,
+                            focusedBorderColor = colors.onSurface,
+                            unfocusedBorderColor = colors.divider,
+                            focusedLabelColor = colors.onSurface,
+                            unfocusedLabelColor = colors.onSurfaceVariant,
+                            cursorColor = colors.onSurface,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = {
+                                graph.deviceSettings.setAiExploreBackupApiKey(aiBackupKeyDraft)
+                                graph.aiExplore.clearCache()
+                                aiQuota = graph.aiExplore.quotaStatus()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.accent,
+                                contentColor = colors.background,
+                            ),
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text("Save backup", color = colors.background, fontWeight = FontWeight.SemiBold)
+                        }
+                        if (savedAiBackupKey.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = {
+                                    aiBackupKeyDraft = ""
+                                    graph.deviceSettings.setAiExploreBackupApiKey("")
+                                    aiQuota = graph.aiExplore.quotaStatus()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
+                                shape = RoundedCornerShape(50),
+                            ) {
+                                Text("Remove")
+                            }
+                        }
+                    }
                 }
             }
 

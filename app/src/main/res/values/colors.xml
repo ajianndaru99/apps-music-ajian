@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="podium_canvas">#030303</color>
-    <color name="podium_icon_background">#0B1932</color>
-    <color name="app_icon_background">#0B1932</color>
+    <color name="podium_icon_background">#030303</color>
+    <color name="app_icon_background">#030303</color>
 </resources>

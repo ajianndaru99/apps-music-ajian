@@ -22,6 +22,7 @@ import app.podium.feature.settings.AiExploreProvider
 import app.podium.sources.api.AlbumDetail
 import app.podium.sources.api.ArtistDetail
 import app.podium.sources.api.ArtistSummary
+import app.podium.sources.api.HistoryEntry
 import app.podium.sources.api.PlaylistDetail
 import app.podium.sources.api.SearchResults
 import app.podium.sources.api.Shelf
@@ -58,7 +59,7 @@ class AiExploreCuratorTest {
     }
 
     @Test
-    fun `without api key uses local fallback and makes zero network calls`() = runBlocking {
+    fun `without api key uses local fallback including youtube account history and likes`() = runBlocking {
         var calls = 0
         val curator = AiExploreCurator(
             store = store,
@@ -79,16 +80,17 @@ class AiExploreCuratorTest {
         assertEquals(ExploreBlueprintSource.LOCAL_FALLBACK, bp.source)
         assertTrue(bp.genres.isNotEmpty())
         assertTrue(bp.shelves.isNotEmpty())
-        assertTrue(bp.genres.any { it.title.contains("Tulus") })
+        assertTrue(bp.genres.any { it.title.contains("Tulus") || it.title.contains("NIKI") })
     }
 
     @Test
-    fun `gemini free tier caches 24h per account and sends key in header only`() = runBlocking {
+    fun `gemini caches 24h, refreshes adaptively after 30s with avoidTitles, and isolates accounts`() = runBlocking {
         var now = 1_700_000_000_000L
         var account = "google:userA"
         var calls = 0
         var lastUrl = ""
         var lastHeaderKey = ""
+        val promptsSeen = mutableListOf<String>()
         settings.setAiExploreProvider(AiExploreProvider.GEMINI)
         settings.setAiExploreApiKey("AIza-test-free-key")
 
@@ -111,10 +113,11 @@ class AiExploreCuratorTest {
             accountKey = { account },
             nowMillis = { now },
             localeCountry = { "ID" },
-            transport = AiHttpTransport { url, headers, _ ->
+            transport = AiHttpTransport { url, headers, body ->
                 calls++
                 lastUrl = url
                 lastHeaderKey = headers["x-goog-api-key"].orEmpty()
+                promptsSeen += body
                 AiHttpResponse(code = 200, body = geminiJson)
             },
         )
@@ -124,61 +127,81 @@ class AiExploreCuratorTest {
         assertEquals(ExploreBlueprintSource.AI_GEMINI, first.source)
         assertFalse(lastUrl.contains("AIza-test-free-key"))
         assertEquals("AIza-test-free-key", lastHeaderKey)
-        assertEquals("Indie Santai", first.genres.first().title)
+        assertTrue(promptsSeen.last().contains("NIKI")) // from YouTube accountHistory
 
-        // Second open 2 hours later: strictly 0 AI calls (reads 24h cache)
+        // Second open 2 hours later without manual refresh: strictly 0 AI calls (reads 24h cache)
         now += 2L * 60 * 60 * 1000
-        val second = curator.loadExplore()
+        curator.loadExplore()
         assertEquals(1, calls)
-        assertEquals("Indie Santai", second.genres.first().title)
-
-        // Force refresh within 1h of generation is blocked by cooldown
-        now -= 90L * 60 * 1000 // now 30 min after generation
-        val tooSoon = curator.loadExplore(forceRefresh = true)
-        assertEquals(1, calls)
-        assertNotNull(tooSoon.statusNote)
 
         // Switching to a different Google account gets its own personalized AI profile
         account = "google:userB"
         val userB = curator.loadExplore()
         assertEquals(2, calls)
         assertEquals("google:userB", userB.accountKey)
+
+        // Manual refresh within 30s cooldown on userB does not call AI
+        now += 10_000L
+        val tooSoon = curator.loadExplore(forceRefresh = true)
+        assertEquals(2, calls)
+        assertNotNull(tooSoon.statusNote)
+
+        // Manual refresh after 30s adapts using updated account history & avoids previous genre titles
+        now += 35_000L
+        curator.loadExplore(forceRefresh = true)
+        assertEquals(3, calls)
+        assertTrue(promptsSeen.last().contains("Indie Santai"))
+
+        // Zero-quota shuffle never hits transport
+        curator.shuffleLocal(userB)
+        assertEquals(3, calls)
     }
 
     @Test
-    fun `daily safety cap and http 429 rate limit prevent quota exhaustion`() = runBlocking {
+    fun `weekend failover automatically switches from rate limited gemini to backup groq key`() = runBlocking {
         var now = 1_700_000_000_000L
-        var calls = 0
-        settings.setAiExploreApiKey("AIza-rate-limit-test")
+        val calledUrls = mutableListOf<String>()
+        settings.setAiExploreProvider(AiExploreProvider.GEMINI)
+        settings.setAiExploreApiKey("AIza-exhausted")
+        settings.setAiExploreBackupProvider(AiExploreProvider.GROQ)
+        settings.setAiExploreBackupApiKey("gsk-backup-free-key")
+
+        val groqJson = """
+            {
+              "choices": [{
+                "message": {
+                  "content": "{\"profileSummary\":\"Weekend Groq mix\",\"genres\":[{\"title\":\"Weekend Groove\",\"query\":\"indie pop weekend\",\"badge\":\"For You\"}],\"shelves\":[{\"title\":\"Chill Weekend\",\"subtitle\":\"Backup AI picks\",\"query\":\"chill hits\"}]}"
+                }
+              }]
+            }
+        """.trimIndent()
 
         val curator = AiExploreCurator(
             store = store,
             online = online,
             settings = settings,
-            accountKey = { "google:userA" },
+            accountKey = { "google:weekend" },
             nowMillis = { now },
             localeCountry = { "ID" },
-            transport = AiHttpTransport { _, _, _ ->
-                calls++
-                AiHttpResponse(code = 429, body = "RESOURCE_EXHAUSTED", retryAfterSeconds = 3600)
+            transport = AiHttpTransport { url, _, _ ->
+                calledUrls += url
+                if (url.contains("generativelanguage.googleapis.com")) {
+                    AiHttpResponse(code = 429, body = "RESOURCE_EXHAUSTED", retryAfterSeconds = 3600)
+                } else {
+                    AiHttpResponse(code = 200, body = groqJson)
+                }
             },
         )
 
-        // First call receives HTTP 429 -> falls back and activates 24h backoff
-        val first = curator.loadExplore()
-        assertEquals(1, calls)
-        assertEquals(ExploreBlueprintSource.LOCAL_FALLBACK, first.source)
-        assertTrue(first.statusNote?.contains("429") == true)
-
-        // Repeated loads / manual refreshes during backoff make 0 calls
-        now += 2L * 60 * 60 * 1000
-        curator.loadExplore(forceRefresh = true)
-        curator.loadExplore(forceRefresh = true)
-        assertEquals(1, calls)
+        val result = curator.loadExplore()
+        assertEquals(2, calledUrls.size)
+        assertEquals(ExploreBlueprintSource.AI_GROQ, result.source)
+        assertEquals("Weekend Groove", result.genres.first().title)
+        assertTrue(result.statusNote?.contains("Groq", ignoreCase = true) == true)
     }
 
     @Test
-    fun `daily cap blocks calls past max calls per day`() = runBlocking {
+    fun `daily safety cap blocks calls past max calls per day`() = runBlocking {
         val now = 1_700_000_000_000L
         var calls = 0
         settings.setAiExploreApiKey("AIza-cap-test")
@@ -197,7 +220,6 @@ class AiExploreCuratorTest {
             },
         )
 
-        // Simulate different accounts forcing fresh generations on same day up to daily limit (3)
         repeat(AiExploreCurator.MAX_AI_CALLS_PER_DAY) { i ->
             curator.clearCache()
             val c = AiExploreCurator(
@@ -216,21 +238,28 @@ class AiExploreCuratorTest {
         }
         assertEquals(AiExploreCurator.MAX_AI_CALLS_PER_DAY, calls)
 
-        // 4th call on the same day must be blocked locally
+        // Call past daily cap must be blocked locally and still return adapted local habits
         val blocked = curator.loadExplore(forceRefresh = true)
         assertEquals(AiExploreCurator.MAX_AI_CALLS_PER_DAY, calls)
         assertEquals(ExploreBlueprintSource.LOCAL_FALLBACK, blocked.source)
-        assertTrue(blocked.statusNote?.contains("safety cap", ignoreCase = true) == true)
+        assertTrue(blocked.statusNote?.contains("Daily AI cap", ignoreCase = true) == true)
     }
 }
 
 private class FakeOnlineRepo : OnlineRepository {
-    private val sampleTrack = Track(
+    private val likedSample = Track(
         id = TrackId.of(SourceId("ytmusic"), "vid1"),
         source = SourceRef(SourceId("ytmusic"), "vid1"),
         title = "Hati-Hati di Jalan",
         artists = emptyList(),
         artistDisplay = "Tulus",
+    )
+    private val historySample = Track(
+        id = TrackId.of(SourceId("ytmusic"), "vid2"),
+        source = SourceRef(SourceId("ytmusic"), "vid2"),
+        title = "lowkey",
+        artists = emptyList(),
+        artistDisplay = "NIKI",
     )
 
     override val status: StateFlow<OnlineStatus?> = MutableStateFlow(
@@ -245,7 +274,7 @@ private class FakeOnlineRepo : OnlineRepository {
     override fun canStartRadio(track: Track) = true
     override fun canRelate(artist: ArtistId) = true
     override suspend fun shelves(): Outcome<List<Shelf>> = Outcome.Success(
-        listOf(Shelf("quick_picks", "Quick picks", tracks = listOf(sampleTrack))),
+        listOf(Shelf("quick_picks", "Quick picks", tracks = listOf(likedSample))),
     )
 
     override suspend fun shelf(id: String, offset: Int, limit: Int): Outcome<ShelfPage> = Outcome.Success(ShelfPage())
@@ -254,13 +283,16 @@ private class FakeOnlineRepo : OnlineRepository {
         Outcome.Failure(PodiumError.Unsupported("genres"))
 
     override fun search(text: String, offset: Int, limit: Int): Flow<Outcome<SearchResults>> =
-        flowOf(Outcome.Success(SearchResults(tracks = listOf(sampleTrack))))
+        flowOf(Outcome.Success(SearchResults(tracks = listOf(likedSample))))
+
+    override suspend fun accountHistory(offset: Int, limit: Int): Outcome<List<HistoryEntry>> =
+        Outcome.Success(listOf(HistoryEntry(historySample, "Today")))
 
     override suspend fun artist(id: ArtistId): Outcome<ArtistDetail> = Outcome.Failure(PodiumError.NotFound("artist"))
     override suspend fun relatedArtists(id: ArtistId): Outcome<List<ArtistSummary>> = Outcome.Success(emptyList())
     override suspend fun collection(id: PlaylistId): Outcome<PlaylistDetail> = Outcome.Failure(PodiumError.NotFound("collection"))
     override val likedIds: StateFlow<Set<TrackId>> = MutableStateFlow(emptySet())
-    override val likedTracks: Flow<List<Track>> = MutableStateFlow(listOf(sampleTrack))
+    override val likedTracks: Flow<List<Track>> = MutableStateFlow(listOf(likedSample))
     override fun setLiked(track: Track, liked: Boolean) = Unit
     override val playlists: Flow<List<OnlinePlaylist>> = MutableStateFlow(emptyList())
     override fun playlist(id: String): Flow<OnlinePlaylistContents?> = MutableStateFlow(null)
@@ -270,6 +302,6 @@ private class FakeOnlineRepo : OnlineRepository {
     override fun addToPlaylist(id: String, tracks: List<Track>, onAdded: (Int) -> Unit) = Unit
     override fun removeFromPlaylist(id: String, entryId: Long) = Unit
     override fun movePlaylistEntry(id: String, entryId: Long, toIndex: Int) = Unit
-    override val recentlyPlayed: Flow<List<Track>> = MutableStateFlow(listOf(sampleTrack))
+    override val recentlyPlayed: Flow<List<Track>> = MutableStateFlow(listOf(likedSample))
     override fun clearHistory() = Unit
 }

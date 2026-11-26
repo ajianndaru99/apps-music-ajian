@@ -77,15 +77,15 @@ jobs:
             rm -f "$KEYSTORE_PATH"
             exit 1
           }
-          cp app/build/outputs/apk/release/app-release.apk "${{ runner.temp }}/ajian-music.apk"
+          cp app/build/outputs/apk/release/app-release.apk "${{ runner.temp }}/music.apk"
           rm -f "$KEYSTORE_PATH"
 
       - name: Upload Signed Release APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ajian-music-release-apk
-          path: ${{ runner.temp }}/ajian-music.apk
+          name: music-release-apk
+          path: ${{ runner.temp }}/music.apk
           if-no-files-found: error
 
       - name: Publish Signed Release to GitHub Releases
@@ -96,9 +96,9 @@ jobs:
         run: |
           TAG="v${VERSION_NAME}"
           gh release delete "$TAG" --yes || true
-          gh release create "$TAG" "${{ runner.temp }}/ajian-music.apk" \
-            --title "Ajian Music ${TAG}" \
-            --notes "Ajian Music ${TAG} (${{ github.sha }})" \
+          gh release create "$TAG" "${{ runner.temp }}/music.apk" \
+            --title "Music ${TAG}" \
+            --notes "Music ${TAG} (${{ github.sha }})" \
             --latest
 
       - name: Build Debug APK (unsigned fallback)

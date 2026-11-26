@@ -167,7 +167,7 @@ internal class WebSignInChecks(
         const val NOT_FINISHED = "Sign-in isn't finished yet. Finish the steps on the page, then tap Check sign-in."
         const val NOT_FINISHED_START_OVER = "Sign-in isn't finished yet. Tap Start over to sign in again."
         const val STILL_WAITING = "Still waiting for the page to finish signing in. When you're done there, tap Check sign-in."
-        const val BLOCKED = "The page tried to open something Podium doesn't allow, so it stopped there. Tap Start over to try again."
+        const val BLOCKED = "The page tried to open something Music doesn't allow, so it stopped there. Tap Start over to try again."
         const val PAGE_ERROR = "The page couldn't load. Check your connection, then tap Start over."
         const val CERTIFICATE = "The page's security certificate couldn't be checked, so it was stopped. Check the phone's date and time, then tap Start over."
         const val PAGE_LOST = "The sign-in page stopped working. Tap Start over to load it again."

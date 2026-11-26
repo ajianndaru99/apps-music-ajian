@@ -116,6 +116,16 @@ interface DeviceSettingsRepository {
 
     fun setAiExploreApiKey(apiKey: String) {}
 
+    /** Optional backup AI provider when primary hits daily quota (e.g., weekend marathons). */
+    val aiExploreBackupProvider: StateFlow<AiExploreProvider> get() = DefaultBackupAiProvider
+
+    fun setAiExploreBackupProvider(provider: AiExploreProvider) {}
+
+    /** Optional backup AI API key, kept strictly on-device. */
+    val aiExploreBackupApiKey: StateFlow<String> get() = EmptyString
+
+    fun setAiExploreBackupApiKey(apiKey: String) {}
+
     fun setAppearance(appearance: DeviceAppearance)
     fun setPreview(appearance: DeviceAppearance?)
     fun setStartupSound(enabled: Boolean)
@@ -134,4 +144,5 @@ enum class AiExploreProvider(val label: String, val defaultModel: String) {
 private val Off: StateFlow<Boolean> = MutableStateFlow(false)
 private val On: StateFlow<Boolean> = MutableStateFlow(true)
 private val DefaultAiProvider: StateFlow<AiExploreProvider> = MutableStateFlow(AiExploreProvider.GEMINI)
+private val DefaultBackupAiProvider: StateFlow<AiExploreProvider> = MutableStateFlow(AiExploreProvider.GROQ)
 private val EmptyString: StateFlow<String> = MutableStateFlow("")

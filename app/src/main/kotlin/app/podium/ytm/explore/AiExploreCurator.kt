@@ -14,6 +14,7 @@ import java.net.URL
 import java.util.Calendar
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -55,6 +56,7 @@ data class AiQuotaStatus(
     val lastGeneratedAtMs: Long?,
     val rateLimitedUntilMs: Long,
     val hasApiKey: Boolean,
+    val hasBackupKey: Boolean,
     val provider: AiExploreProvider,
 )
 
@@ -112,6 +114,7 @@ class AiExploreCurator internal constructor(
             lastGeneratedAtMs = cached?.generatedAtMs,
             rateLimitedUntilMs = store.rateLimitedUntilMs(),
             hasApiKey = settings.aiExploreApiKey.value.isNotBlank(),
+            hasBackupKey = settings.aiExploreBackupApiKey.value.isNotBlank(),
             provider = settings.aiExploreProvider.value,
         )
     }
@@ -120,19 +123,28 @@ class AiExploreCurator internal constructor(
         store.clearAllCaches()
     }
 
+    /** Zero-quota local shuffle for instant weekend variety without spending any AI calls. */
+    fun shuffleLocal(blueprint: ExploreBlueprint): ExploreBlueprint = blueprint.copy(
+        genres = blueprint.genres.shuffled(),
+        shelves = blueprint.shelves.shuffled(),
+        statusNote = "Shuffled locally (0 AI quota used)",
+    )
+
     suspend fun loadExplore(forceRefresh: Boolean = false): ExploreBlueprint = mutex.withLock {
         val now = nowMillis()
         val key = normalizedAccountKey(accountKey(), online.status.value)
-        val apiKey = settings.aiExploreApiKey.value.trim()
-        val provider = settings.aiExploreProvider.value
+        val primaryKey = settings.aiExploreApiKey.value.trim()
+        val primaryProvider = settings.aiExploreProvider.value
+        val backupKey = settings.aiExploreBackupApiKey.value.trim()
+        val backupProvider = settings.aiExploreBackupProvider.value
         val cached = store.readBlueprint(key)
         val rateLimitedUntil = store.rateLimitedUntilMs()
+        val hasAnyKey = primaryKey.isNotEmpty() || backupKey.isNotEmpty()
 
-        // Never spend quota when a valid 24-hour cache exists, unless user just added an AI key
-        // while only a local fallback was cached before.
+        // Within 24h TTL without manual refresh -> return cached instantaneously (0 AI calls).
         if (!forceRefresh && cached != null && now - cached.generatedAtMs < CACHE_TTL_MS) {
             val shouldUpgradeFallback = cached.source == ExploreBlueprintSource.LOCAL_FALLBACK &&
-                apiKey.isNotEmpty() &&
+                hasAnyKey &&
                 rateLimitedUntil <= now &&
                 store.callsOnDay(dayKey(now)) < MAX_AI_CALLS_PER_DAY
             if (!shouldUpgradeFallback) {
@@ -140,63 +152,95 @@ class AiExploreCurator internal constructor(
             }
         }
 
-        // Guardrail 1: Manual refresh cooldown when cached AI curation is still fresh.
+        // Anti-double-tap cooldown (30s) on manual refresh; keeps responsive customization.
         if (forceRefresh && cached != null && cached.source != ExploreBlueprintSource.LOCAL_FALLBACK &&
-            now - cached.generatedAtMs < MANUAL_REFRESH_COOLDOWN_MS && apiKey.isNotEmpty()
+            now - cached.generatedAtMs < MANUAL_REFRESH_COOLDOWN_MS && hasAnyKey
         ) {
             return@withLock cached.copy(
-                statusNote = "Cached recently • Wait up to 1 hour between AI refreshes to protect free-tier quota",
+                genres = cached.genres.shuffled(),
+                statusNote = "Refreshed locally • Wait 30s before calling AI again",
             )
         }
 
-        val taste = gatherTasteSignals()
+        val taste = gatherTasteSignals(syncLikes = forceRefresh)
 
-        // Guardrail 2: No API key configured -> local personalized + regional trend blueprint.
-        if (apiKey.isEmpty()) {
-            return@withLock buildLocalFallback(key, now, taste, note = null).also {
-                store.writeBlueprint(key, it)
-            }
+        if (!hasAnyKey) {
+            return@withLock buildLocalFallback(
+                accountKey = key,
+                now = now,
+                taste = taste,
+                note = null,
+                shuffled = forceRefresh,
+            ).also { store.writeBlueprint(key, it) }
         }
 
-        // Guardrail 3: Previous HTTP 429 rate-limit backoff -> stay offline/local, no retry storm.
-        if (rateLimitedUntil > now) {
-            val note = "AI quota paused temporarily — using local smart mix"
-            return@withLock (cached?.takeIf { it.source != ExploreBlueprintSource.LOCAL_FALLBACK }?.copy(statusNote = note)
-                ?: buildLocalFallback(key, now, taste, note = note))
-        }
-
-        // Guardrail 4: Daily client-side safety cap (default 3 calls/day vs normal 1 call/day usage).
         val today = dayKey(now)
         val usedToday = store.callsOnDay(today)
-        if (usedToday >= MAX_AI_CALLS_PER_DAY) {
-            val note = "Daily AI safety cap ($usedToday/$MAX_AI_CALLS_PER_DAY) reached — keeping free-tier key safe"
-            return@withLock (cached?.takeIf { it.source != ExploreBlueprintSource.LOCAL_FALLBACK }?.copy(statusNote = note)
-                ?: buildLocalFallback(key, now, taste, note = note))
+
+        // If rate-limited on primary/all or daily budget reached -> adapt locally using latest YouTube habits!
+        if (rateLimitedUntil > now && backupKey.isEmpty()) {
+            val note = "AI cooldown active — refreshed using latest YouTube likes & history"
+            return@withLock buildLocalFallback(key, now, taste, note = note, shuffled = forceRefresh)
         }
 
-        // Guardrail 5: Record call before network I/O so repeated retries never slip past budget.
-        store.incrementCallsOnDay(today)
+        if (usedToday >= MAX_AI_CALLS_PER_DAY) {
+            val note = "Daily AI cap ($usedToday/$MAX_AI_CALLS_PER_DAY) reached — adapted using latest YouTube likes & history"
+            return@withLock buildLocalFallback(key, now, taste, note = note, shuffled = true)
+        }
 
-        val prompt = buildCompactPrompt(taste, country = localeCountry(), period = timeOfDayLabel(now))
-        val aiResult = callProvider(provider, apiKey, prompt, key, now)
+        val avoidTitles = if (forceRefresh) cached?.genres?.map { it.title }.orEmpty() else emptyList()
+        val prompt = buildCompactPrompt(
+            taste = taste,
+            country = localeCountry(),
+            period = timeOfDayLabel(now),
+            avoidTitles = avoidTitles,
+        )
 
-        return@withLock when (aiResult) {
-            is AiCallOutcome.Success -> {
-                store.writeBlueprint(key, aiResult.blueprint)
-                aiResult.blueprint
+        var lastOutcome: AiCallOutcome = AiCallOutcome.Failed("no key")
+
+        // Try Primary Provider if available and not in rate-limit backoff
+        if (primaryKey.isNotEmpty() && rateLimitedUntil <= now) {
+            store.incrementCallsOnDay(today)
+            lastOutcome = callProvider(primaryProvider, primaryKey, prompt, key, now)
+            if (lastOutcome is AiCallOutcome.Success) {
+                store.writeBlueprint(key, lastOutcome.blueprint)
+                return@withLock lastOutcome.blueprint
             }
+        }
+
+        // Weekend / Quota Auto-Failover to Backup Provider/Key
+        val canTryBackup = backupKey.isNotEmpty() &&
+            (backupProvider != primaryProvider || backupKey != primaryKey) &&
+            store.callsOnDay(today) < MAX_AI_CALLS_PER_DAY
+        if (canTryBackup) {
+            store.incrementCallsOnDay(today)
+            val backupOutcome = callProvider(backupProvider, backupKey, prompt, key, now)
+            if (backupOutcome is AiCallOutcome.Success) {
+                val noted = backupOutcome.blueprint.copy(
+                    statusNote = if (primaryKey.isNotEmpty()) {
+                        "Primary key hit limit — switched to ${backupProvider.label}"
+                    } else null,
+                )
+                store.writeBlueprint(key, noted)
+                return@withLock noted
+            }
+            lastOutcome = backupOutcome
+        }
+
+        return@withLock when (val outcome = lastOutcome) {
             is AiCallOutcome.RateLimited -> {
-                val backoffMs = maxOf(RATE_LIMIT_BACKOFF_MS, (aiResult.retryAfterSeconds ?: 0L) * 1000L)
+                val backoffMs = maxOf(RATE_LIMIT_BACKOFF_MS, (outcome.retryAfterSeconds ?: 0L) * 1000L)
                 store.setRateLimitedUntilMs(now + backoffMs)
-                val note = "Free-tier rate limit reached (HTTP 429) — paused AI for 24h & switched to local mix"
-                cached?.takeIf { it.source != ExploreBlueprintSource.LOCAL_FALLBACK }?.copy(statusNote = note)
-                    ?: buildLocalFallback(key, now, taste, note = note).also { store.writeBlueprint(key, it) }
+                val note = "Free-tier rate limit (HTTP 429) — adapted locally using YouTube likes & history"
+                buildLocalFallback(key, now, taste, note = note, shuffled = true).also {
+                    store.writeBlueprint(key, it)
+                }
             }
             is AiCallOutcome.Failed -> {
-                val note = "AI unavailable (${aiResult.reason}) — using local smart mix"
-                cached?.takeIf { it.source != ExploreBlueprintSource.LOCAL_FALLBACK }?.copy(statusNote = note)
-                    ?: buildLocalFallback(key, now, taste, note = note)
+                val note = "AI unavailable (${outcome.reason}) — adapted locally using YouTube history"
+                buildLocalFallback(key, now, taste, note = note, shuffled = forceRefresh)
             }
+            is AiCallOutcome.Success -> outcome.blueprint
         }
     }
 
@@ -217,39 +261,59 @@ class AiExploreCurator internal constructor(
         return tracks
     }
 
-    private suspend fun gatherTasteSignals(): TasteSignals {
+    private suspend fun gatherTasteSignals(syncLikes: Boolean): TasteSignals {
+        if (syncLikes) {
+            runCatching { online.refreshLibrary() }
+            // Brief yield so an active network likes sync (VLLM) updates Room if fast
+            delay(250L)
+        } else {
+            runCatching { online.refreshLibrary() }
+        }
+
         val liked = runCatching { online.likedTracks.firstOrNull().orEmpty() }.getOrElse { emptyList() }
         val recent = runCatching { online.recentlyPlayed.firstOrNull().orEmpty() }.getOrElse { emptyList() }
+        val accountHistory = runCatching {
+            (online.accountHistory(0, 20) as? Outcome.Success)?.value.orEmpty().map { it.track }
+        }.getOrElse { emptyList() }
         val libraryArtists = runCatching {
-            (online.libraryArtists(0, 10) as? Outcome.Success)?.value.orEmpty()
+            (online.libraryArtists(0, 12) as? Outcome.Success)?.value.orEmpty()
+        }.getOrElse { emptyList() }
+        val playlistTitles = runCatching {
+            (online.libraryPlaylists(0, 8) as? Outcome.Success)?.value.orEmpty().map { it.title }
+        }.getOrElse { emptyList() }
+        val albumTitles = runCatching {
+            (online.libraryAlbums(0, 8) as? Outcome.Success)?.value.orEmpty().map { "${it.title} - ${it.artistDisplay}" }
         }.getOrElse { emptyList() }
         val shelves = runCatching {
             (online.shelves() as? Outcome.Success)?.value.orEmpty()
         }.getOrElse { emptyList() }
 
-        val seedTracks = (liked.take(8) + recent.take(6) + shelves.flatMap { it.tracks }.take(8))
+        // Prioritize recent in-app plays + YouTube account history + liked songs for adaptive refresh
+        val orderedSeeds = (recent.take(6) + accountHistory.take(8) + liked.take(8) + shelves.flatMap { it.tracks }.take(6))
             .distinctBy { "${it.title.lowercase()}|${it.artistDisplay.lowercase()}" }
-            .take(14)
+            .take(15)
             .map { track ->
                 val artist = track.artistDisplay.trim()
                 if (artist.isNotEmpty()) "${track.title} - $artist" else track.title
             }
 
         val topArtists = (
-            libraryArtists.map { it.name } +
+            recent.map { it.artistDisplay } +
+                accountHistory.map { it.artistDisplay } +
                 liked.map { it.artistDisplay } +
-                recent.map { it.artistDisplay } +
+                libraryArtists.map { it.name } +
                 shelves.flatMap { it.tracks }.map { it.artistDisplay }
             )
             .flatMap { it.split(",", "&", "feat.", "ft.") }
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.equals("Unknown", ignoreCase = true) }
             .distinctBy { it.lowercase() }
-            .take(10)
+            .take(12)
 
         return TasteSignals(
             topArtists = topArtists,
-            seedTracks = seedTracks,
+            seedTracks = orderedSeeds,
+            playlistThemes = (playlistTitles + albumTitles).distinct().take(6),
             signedIn = online.status.value?.account?.signedIn == true,
         )
     }
@@ -278,8 +342,8 @@ class AiExploreCurator internal constructor(
                         put(
                             "generationConfig",
                             JSONObject().apply {
-                                put("temperature", 0.75)
-                                put("maxOutputTokens", 700)
+                                put("temperature", 0.85)
+                                put("maxOutputTokens", 900)
                                 put("responseMimeType", "application/json")
                             },
                         )
@@ -298,8 +362,8 @@ class AiExploreCurator internal constructor(
                     val url = "https://api.groq.com/openai/v1/chat/completions"
                     val body = JSONObject().apply {
                         put("model", provider.defaultModel)
-                        put("temperature", 0.75)
-                        put("max_tokens", 700)
+                        put("temperature", 0.85)
+                        put("max_tokens", 900)
                         put("response_format", JSONObject().put("type", "json_object"))
                         put(
                             "messages",
@@ -433,16 +497,21 @@ class AiExploreCurator internal constructor(
         taste: TasteSignals,
         country: String,
         period: String,
+        avoidTitles: List<String>,
     ): String {
         val artists = if (taste.topArtists.isEmpty()) "none yet" else taste.topArtists.joinToString(", ")
         val tracks = if (taste.seedTracks.isEmpty()) "none yet" else taste.seedTracks.joinToString("; ")
+        val themes = if (taste.playlistThemes.isEmpty()) "none" else taste.playlistThemes.joinToString(", ")
+        val avoidClause = if (avoidTitles.isNotEmpty()) {
+            " Avoid repeating these previous titles: [${avoidTitles.joinToString(", ")}]."
+        } else ""
         return """
-            You curate music discovery for YouTube Music in region=$country during $period.
-            Listener taste (anonymous): artists=[$artists]; tracks=[$tracks].
+            You curate YouTube Music Explore in region=$country during $period.
+            Account habits & likes (anonymous): recent_and_liked=[$tracks]; favorite_artists=[$artists]; playlists_albums=[$themes].$avoidClause
             Return ONLY JSON with keys:
-            - "profileSummary": short 1-sentence taste + trend summary (max 14 words).
-            - "genres": 8 diverse genre/mood tiles blending listener's favorites, adjacent genres, and current hits. Each object: {"title":"2-4 words","query":"YouTube Music search query","badge":"For You|Trending|Discover"}.
-            - "shelves": 3 curated song shelves ("Trending Now", "Because of your vibe", "Fresh Genre Mix"). Each object: {"title":"...","subtitle":"short reason","query":"specific search query for songs"}.
+            - "profileSummary": concise 1-sentence summary of listener's YouTube habits & trends (max 15 words).
+            - "genres": 10 diverse mood/genre cards adapting to recent habits, liked vibe, adjacent discovery, and regional hits. Each: {"title":"2-4 words","query":"YouTube Music search query","badge":"For You|Liked Vibe|Trending|Discover"}.
+            - "shelves": 4 curated song shelves mixing habits & discovery. Each: {"title":"...","subtitle":"short reason","query":"specific search query for songs"}.
         """.trimIndent()
     }
 
@@ -451,17 +520,22 @@ class AiExploreCurator internal constructor(
         now: Long,
         taste: TasteSignals,
         note: String?,
+        shuffled: Boolean,
     ): ExploreBlueprint {
-        val topArtist = taste.topArtists.firstOrNull()
-        val secondArtist = taste.topArtists.getOrNull(1)
+        val artist0 = taste.topArtists.getOrNull(0)
+        val artist1 = taste.topArtists.getOrNull(1)
+        val artist2 = taste.topArtists.getOrNull(2)
         val regionLabel = if (localeCountry().equals("ID", ignoreCase = true)) "Indonesia" else "Global"
 
         val baseGenres = buildList {
-            if (topArtist != null) {
-                add(ExploreGenreCard("$topArtist Mix", "$topArtist top songs mix", badge = "For You"))
+            if (artist0 != null) {
+                add(ExploreGenreCard("$artist0 Vibe", "$artist0 similar songs mix", badge = "Liked Vibe"))
             }
-            if (secondArtist != null) {
-                add(ExploreGenreCard("Similar to $secondArtist", "$secondArtist radio mix songs", badge = "For You"))
+            if (artist1 != null) {
+                add(ExploreGenreCard("Like $artist1", "$artist1 radio top songs", badge = "For You"))
+            }
+            if (artist2 != null) {
+                add(ExploreGenreCard("$artist2 Mix", "$artist2 popular tracks", badge = "For You"))
             }
             add(ExploreGenreCard("Trending $regionLabel", "top hits $regionLabel trending songs 2026", badge = "Trending"))
             add(ExploreGenreCard("Indie & Chill", "indie pop chill acoustic songs", badge = "Discover"))
@@ -471,9 +545,18 @@ class AiExploreCurator internal constructor(
             add(ExploreGenreCard("Electronic & Lo-fi", "lofi chill beats synth electronic music", badge = "Focus"))
             add(ExploreGenreCard("J-Pop & Anime", "popular jpop anime hits songs", badge = "Discover"))
             add(ExploreGenreCard("90s & 2000s", "90s 2000s nostalgic hits songs", badge = "Throwback"))
-        }.take(8)
+        }.take(10)
 
-        val shelves = buildList {
+        val baseShelves = buildList {
+            if (artist0 != null) {
+                add(
+                    ExploreCuratedShelf(
+                        title = "Because You Like $artist0",
+                        subtitle = "Tailored to your YouTube likes & history",
+                        query = "$artist0 similar artists top songs",
+                    ),
+                )
+            }
             add(
                 ExploreCuratedShelf(
                     title = "Trending in $regionLabel",
@@ -481,12 +564,12 @@ class AiExploreCurator internal constructor(
                     query = "top viral hits $regionLabel songs",
                 ),
             )
-            if (topArtist != null) {
+            if (artist1 != null) {
                 add(
                     ExploreCuratedShelf(
-                        title = "Inspired by $topArtist",
-                        subtitle = "Tailored to your active account taste",
-                        query = "$topArtist similar artists top songs",
+                        title = "Mixed Around $artist1",
+                        subtitle = "Inspired by your recent listening habits",
+                        query = "$artist1 mix songs",
                     ),
                 )
             } else {
@@ -500,15 +583,15 @@ class AiExploreCurator internal constructor(
             }
             add(
                 ExploreCuratedShelf(
-                    title = "Genre Discovery Mix",
+                    title = "Fresh Genre Discovery",
                     subtitle = "Explore outside your usual rotation",
                     query = "indie electronic rnb best songs mix",
                 ),
             )
-        }
+        }.take(4)
 
-        val summary = if (topArtist != null) {
-            "Mix inspired by $topArtist & $regionLabel trends"
+        val summary = if (artist0 != null) {
+            "Personalized from your YouTube habits ($artist0) & $regionLabel trends"
         } else {
             "$regionLabel trends & multi-genre discovery"
         }
@@ -518,8 +601,8 @@ class AiExploreCurator internal constructor(
             generatedAtMs = now,
             source = ExploreBlueprintSource.LOCAL_FALLBACK,
             profileSummary = summary,
-            genres = baseGenres,
-            shelves = shelves,
+            genres = if (shuffled) baseGenres.shuffled() else baseGenres,
+            shelves = if (shuffled) baseShelves.shuffled() else baseShelves,
             statusNote = note,
         )
     }
@@ -556,6 +639,7 @@ class AiExploreCurator internal constructor(
     private data class TasteSignals(
         val topArtists: List<String>,
         val seedTracks: List<String>,
+        val playlistThemes: List<String>,
         val signedIn: Boolean,
     )
 
@@ -568,9 +652,9 @@ class AiExploreCurator internal constructor(
     companion object {
         const val PREFS_NAME = "ai_explore_cache"
         const val CACHE_TTL_MS = 24L * 60 * 60 * 1000
-        const val MANUAL_REFRESH_COOLDOWN_MS = 60L * 60 * 1000
+        const val MANUAL_REFRESH_COOLDOWN_MS = 30_000L
         const val RATE_LIMIT_BACKOFF_MS = 24L * 60 * 60 * 1000
-        const val MAX_AI_CALLS_PER_DAY = 3
+        const val MAX_AI_CALLS_PER_DAY = 5
     }
 }
 

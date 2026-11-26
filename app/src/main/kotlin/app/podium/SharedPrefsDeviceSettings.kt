@@ -179,6 +179,28 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         }
     }
 
+    private val _aiExploreBackupProvider = MutableStateFlow(
+        enumOf(prefs.getString(KEY_AI_EXPLORE_BACKUP_PROVIDER, null), AiExploreProvider.GROQ),
+    )
+    override val aiExploreBackupProvider: StateFlow<AiExploreProvider> = _aiExploreBackupProvider.asStateFlow()
+
+    override fun setAiExploreBackupProvider(provider: AiExploreProvider) {
+        _aiExploreBackupProvider.value = provider
+        prefs.edit { putString(KEY_AI_EXPLORE_BACKUP_PROVIDER, provider.name) }
+    }
+
+    private val _aiExploreBackupApiKey = MutableStateFlow(prefs.getString(KEY_AI_EXPLORE_BACKUP_API_KEY, "").orEmpty())
+    override val aiExploreBackupApiKey: StateFlow<String> = _aiExploreBackupApiKey.asStateFlow()
+
+    override fun setAiExploreBackupApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        _aiExploreBackupApiKey.value = cleaned
+        prefs.edit {
+            if (cleaned.isEmpty()) remove(KEY_AI_EXPLORE_BACKUP_API_KEY)
+            else putString(KEY_AI_EXPLORE_BACKUP_API_KEY, cleaned)
+        }
+    }
+
     override fun setAutoplay(enabled: Boolean) {
         _autoplay.value = enabled
         prefs.edit { putBoolean(KEY_AUTOPLAY, enabled) }
@@ -292,6 +314,8 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         const val KEY_PRE_CACHE_NEXT = "pre_cache_next"
         const val KEY_AI_EXPLORE_PROVIDER = "ai_explore_provider"
         const val KEY_AI_EXPLORE_API_KEY = "ai_explore_api_key"
+        const val KEY_AI_EXPLORE_BACKUP_PROVIDER = "ai_explore_backup_provider"
+        const val KEY_AI_EXPLORE_BACKUP_API_KEY = "ai_explore_backup_api_key"
         const val KEY_CUSTOM = "custom_argb"
         const val KEY_GRAIN = "grain"
         const val KEY_SOUND = "startup_sound"

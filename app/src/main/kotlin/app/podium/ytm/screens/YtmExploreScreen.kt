@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package app.podium.ytm.screens
 
 import androidx.compose.foundation.background
@@ -23,12 +25,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,6 +78,7 @@ fun YtmExploreScreen(
     val accountKey by graph.online.accountKey.collectAsStateWithLifecycle()
     val aiApiKey by graph.deviceSettings.aiExploreApiKey.collectAsStateWithLifecycle()
     val aiProvider by graph.deviceSettings.aiExploreProvider.collectAsStateWithLifecycle()
+    val aiBackupKey by graph.deviceSettings.aiExploreBackupApiKey.collectAsStateWithLifecycle()
     val snapshot by graph.playbackController.snapshot.collectAsStateWithLifecycle()
     val likedIds by graph.favorites.favorites.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -87,6 +92,17 @@ fun YtmExploreScreen(
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
 
+    suspend fun loadShelvesFor(bp: ExploreBlueprint) {
+        val resolvedShelves = coroutineScope {
+            bp.shelves.map { shelf ->
+                async {
+                    shelf.title to graph.aiExplore.searchTracksForQuery(shelf.query, limit = 8)
+                }
+            }.awaitAll().toMap()
+        }
+        shelfTracks = resolvedShelves
+    }
+
     suspend fun loadAll(forceRefresh: Boolean) {
         val loadedBlueprint = graph.aiExplore.loadExplore(forceRefresh = forceRefresh)
         blueprint = loadedBlueprint
@@ -96,14 +112,7 @@ fun YtmExploreScreen(
             nativeGenres = nativeResult.value
         }
 
-        val resolvedShelves = coroutineScope {
-            loadedBlueprint.shelves.map { shelf ->
-                async {
-                    shelf.title to graph.aiExplore.searchTracksForQuery(shelf.query, limit = 8)
-                }
-            }.awaitAll().toMap()
-        }
-        shelfTracks = resolvedShelves
+        loadShelvesFor(loadedBlueprint)
 
         if (status?.canLiveRadio == true && liveGenres.isEmpty()) {
             val liveOutcome = graph.online.liveGenres()
@@ -114,7 +123,7 @@ fun YtmExploreScreen(
         }
     }
 
-    LaunchedEffect(accountKey, aiApiKey, aiProvider) {
+    LaunchedEffect(accountKey, aiApiKey, aiProvider, aiBackupKey) {
         loading = true
         loadAll(forceRefresh = false)
         loading = false
@@ -137,189 +146,208 @@ fun YtmExploreScreen(
         fromBlueprint + extra
     }
 
-    LazyColumn(
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = {
+            if (!refreshing) {
+                scope.launch {
+                    refreshing = true
+                    loadAll(forceRefresh = true)
+                    refreshing = false
+                }
+            }
+        },
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background),
-        contentPadding = PaddingValues(bottom = 24.dp),
     ) {
-        if (loading && blueprint == null) {
-            item(key = "loading") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = colors.onSurface)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            if (loading && blueprint == null) {
+                item(key = "loading") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(color = colors.onSurface)
+                    }
                 }
             }
-        }
 
-        blueprint?.let { bp ->
-            item(key = "explore_banner") {
-                AiExploreHeaderCard(
-                    blueprint = bp,
-                    hasApiKey = aiApiKey.isNotBlank(),
-                    refreshing = refreshing,
-                    onRefresh = {
-                        if (!refreshing) {
-                            scope.launch {
-                                refreshing = true
-                                loadAll(forceRefresh = true)
-                                refreshing = false
+            blueprint?.let { bp ->
+                item(key = "explore_banner") {
+                    AiExploreHeaderCard(
+                        blueprint = bp,
+                        hasAnyApiKey = aiApiKey.isNotBlank() || aiBackupKey.isNotBlank(),
+                        refreshing = refreshing,
+                        onShuffleLocal = {
+                            val shuffled = graph.aiExplore.shuffleLocal(bp)
+                            blueprint = shuffled
+                            scope.launch { loadShelvesFor(shuffled) }
+                        },
+                        onRefresh = {
+                            if (!refreshing) {
+                                scope.launch {
+                                    refreshing = true
+                                    loadAll(forceRefresh = true)
+                                    refreshing = false
+                                }
                             }
-                        }
-                    },
-                    onOpenSettings = onOpenSettings,
-                )
-            }
-        }
-
-        if (combinedGenres.isNotEmpty()) {
-            item(key = "genres_header") {
-                YtmSectionHeader(title = "Moods & genres")
+                        },
+                        onOpenSettings = onOpenSettings,
+                    )
+                }
             }
 
-            val rows = combinedGenres.chunked(2)
-            items(rows, key = { pair -> pair.joinToString("_") { it.title } }) { pair ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    pair.forEach { card ->
-                        val accent = remember(card.title) {
-                            val hue = (abs(card.title.hashCode()) % 360).toFloat()
-                            Color.hsl(hue, 0.55f, 0.55f)
-                        }
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(56.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(colors.surfaceVariant)
-                                .clickable { onOpenGenre(card.title, card.query) },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
+            if (combinedGenres.isNotEmpty()) {
+                item(key = "genres_header") {
+                    YtmSectionHeader(title = "Moods & genres")
+                }
+
+                val rows = combinedGenres.chunked(2)
+                items(rows, key = { pair -> pair.joinToString("_") { it.title } }) { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        pair.forEach { card ->
+                            val accent = remember(card.title) {
+                                val hue = (abs(card.title.hashCode()) % 360).toFloat()
+                                Color.hsl(hue, 0.55f, 0.55f)
+                            }
+                            Row(
                                 modifier = Modifier
-                                    .width(6.dp)
+                                    .weight(1f)
                                     .height(56.dp)
-                                    .background(accent),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
-                                Text(
-                                    text = card.title,
-                                    style = YtmTheme.type.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = colors.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(colors.surfaceVariant)
+                                    .clickable { onOpenGenre(card.title, card.query) },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(6.dp)
+                                        .height(56.dp)
+                                        .background(accent),
                                 )
-                                card.badge?.let { badge ->
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
                                     Text(
-                                        text = badge,
-                                        style = YtmTheme.type.labelSmall,
-                                        color = colors.onSurfaceVariant,
+                                        text = card.title,
+                                        style = YtmTheme.type.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        color = colors.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                    card.badge?.let { badge ->
+                                        Text(
+                                            text = badge,
+                                            style = YtmTheme.type.labelSmall,
+                                            color = colors.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
-                    if (pair.size == 1) {
-                        Spacer(Modifier.weight(1f))
+                        if (pair.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
-        }
 
-        blueprint?.shelves?.forEach { shelf: ExploreCuratedShelf ->
-            val tracks = shelfTracks[shelf.title].orEmpty()
-            if (tracks.isNotEmpty()) {
-                item(key = "shelf_header_${shelf.title}") {
-                    Spacer(Modifier.height(8.dp))
-                    YtmSectionHeader(
-                        title = shelf.title,
-                        actionLabel = "Play all",
-                        onAction = { actions.play(tracks, 0, shelf.title) },
-                    )
-                    if (shelf.subtitle.isNotBlank()) {
-                        Text(
-                            text = shelf.subtitle,
-                            style = YtmTheme.type.labelMedium,
-                            color = colors.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+            blueprint?.shelves?.forEach { shelf: ExploreCuratedShelf ->
+                val tracks = shelfTracks[shelf.title].orEmpty()
+                if (tracks.isNotEmpty()) {
+                    item(key = "shelf_header_${shelf.title}") {
+                        Spacer(Modifier.height(8.dp))
+                        YtmSectionHeader(
+                            title = shelf.title,
+                            actionLabel = "Play all",
+                            onAction = { actions.play(tracks, 0, shelf.title) },
                         )
-                    }
-                }
-                item(key = "shelf_row_${shelf.title}") {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        itemsIndexed(tracks, key = { idx, t -> "${shelf.title}_${idx}_${t.id.value}" }) { index, track ->
-                            YtmSquareCard(
-                                title = track.title,
-                                subtitle = track.artistDisplay,
-                                artworkUri = track.artwork?.uri,
-                                onClick = { actions.play(tracks, index, shelf.title) },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (liveGenres.isNotEmpty()) {
-            item(key = "live_header") {
-                Spacer(Modifier.height(12.dp))
-                YtmSectionHeader(title = "Live radio")
-            }
-
-            item(key = "live_chips") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(liveGenres, key = { "lg_$it" }) { genre ->
-                        val selected = genre == selectedLiveGenre
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (selected) colors.chipSelectedBg else colors.chipUnselectedBg)
-                                .clickable { selectedLiveGenre = genre }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Radio,
-                                contentDescription = null,
-                                tint = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
-                                modifier = Modifier.height(16.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
+                        if (shelf.subtitle.isNotBlank()) {
                             Text(
-                                text = genre,
+                                text = shelf.subtitle,
                                 style = YtmTheme.type.labelMedium,
-                                color = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
+                                color = colors.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
                             )
+                        }
+                    }
+                    item(key = "shelf_row_${shelf.title}") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            itemsIndexed(tracks, key = { idx, t -> "${shelf.title}_${idx}_${t.id.value}" }) { _, track ->
+                                YtmSquareCard(
+                                    title = track.title,
+                                    subtitle = track.artistDisplay,
+                                    artworkUri = track.artwork?.uri,
+                                    onClick = { actions.playAlone(track) },
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            items(liveStations, key = { "live_${it.id.value}" }) { station ->
-                YtmTrackRow(
-                    track = station,
-                    isPlaying = snapshot.item?.trackId == station.id,
-                    isLiked = station.id in likedIds,
-                    onClick = { actions.playAlone(station) },
-                    onToggleLike = { graph.favorites.toggle(station.id) },
-                )
+            if (liveGenres.isNotEmpty()) {
+                item(key = "live_header") {
+                    Spacer(Modifier.height(12.dp))
+                    YtmSectionHeader(title = "Live radio")
+                }
+
+                item(key = "live_chips") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(liveGenres, key = { "lg_$it" }) { genre ->
+                            val selected = genre == selectedLiveGenre
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) colors.chipSelectedBg else colors.chipUnselectedBg)
+                                    .clickable { selectedLiveGenre = genre }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Radio,
+                                    contentDescription = null,
+                                    tint = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
+                                    modifier = Modifier.height(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = genre,
+                                    style = YtmTheme.type.labelMedium,
+                                    color = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                items(liveStations, key = { "live_${it.id.value}" }) { station ->
+                    YtmTrackRow(
+                        track = station,
+                        isPlaying = snapshot.item?.trackId == station.id,
+                        isLiked = station.id in likedIds,
+                        onClick = { actions.playAlone(station) },
+                        onToggleLike = { graph.favorites.toggle(station.id) },
+                    )
+                }
             }
         }
     }
@@ -328,16 +356,17 @@ fun YtmExploreScreen(
 @Composable
 private fun AiExploreHeaderCard(
     blueprint: ExploreBlueprint,
-    hasApiKey: Boolean,
+    hasAnyApiKey: Boolean,
     refreshing: Boolean,
+    onShuffleLocal: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val colors = YtmTheme.colors
     val sourceLabel = when (blueprint.source) {
-        ExploreBlueprintSource.AI_GEMINI -> "AI Curated • Gemini Free Tier (24h Cache)"
-        ExploreBlueprintSource.AI_GROQ -> "AI Curated • Groq Free Tier (24h Cache)"
-        ExploreBlueprintSource.LOCAL_FALLBACK -> "Smart Explore • Local Taste & Trends"
+        ExploreBlueprintSource.AI_GEMINI -> "AI Curated • Gemini Free Tier"
+        ExploreBlueprintSource.AI_GROQ -> "AI Curated • Groq Free Tier"
+        ExploreBlueprintSource.LOCAL_FALLBACK -> "Smart Explore • YouTube Habits & Trends"
     }
 
     Column(
@@ -372,23 +401,36 @@ private fun AiExploreHeaderCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (refreshing) {
-                CircularProgressIndicator(
-                    color = colors.onSurface,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(20.dp),
-                )
-            } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
-                    onClick = onRefresh,
+                    onClick = onShuffleLocal,
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = "Refresh Explore",
+                        imageVector = Icons.Filled.Shuffle,
+                        contentDescription = "Shuffle Explore (0 quota)",
                         tint = colors.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
+                }
+                if (refreshing) {
+                    CircularProgressIndicator(
+                        color = colors.onSurface,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.padding(6.dp).size(18.dp),
+                    )
+                } else {
+                    IconButton(
+                        onClick = onRefresh,
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Refresh from recent habits",
+                            tint = colors.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
         }
@@ -406,7 +448,7 @@ private fun AiExploreHeaderCard(
                 color = colors.onSurfaceMuted,
             )
         }
-        if (!hasApiKey) {
+        if (!hasAnyApiKey) {
             Spacer(Modifier.height(10.dp))
             Button(
                 onClick = onOpenSettings,

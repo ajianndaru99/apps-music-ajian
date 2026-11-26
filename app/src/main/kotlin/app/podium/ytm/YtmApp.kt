@@ -235,12 +235,12 @@ private fun YtmTopBar(
             Image(
                 painter = painterResource(id = R.drawable.app_logo_mark),
                 contentDescription = "App logo",
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
-                    .size(30.dp)
-                    .clip(RoundedCornerShape(8.dp)),
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(6.dp)),
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "Music",
                 style = YtmTheme.type.headlineMedium.copy(fontWeight = FontWeight.Bold),
