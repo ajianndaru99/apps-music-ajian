@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -129,6 +130,18 @@ internal class YouTubeStreamWalker(
     fun order(): List<String> {
         restore()
         return (order + lastResort).map { it.key }
+    }
+
+    /** Pre-warms player script metadata and guest visitor ID off the UI path at startup. */
+    suspend fun warmUp() {
+        restore()
+        val signedIn = runCatching { session() }.getOrNull()
+        coroutineScope {
+            launch { runCatching { scripts?.current() } }
+            if (signedIn == null) {
+                order.firstOrNull()?.let { first -> launch { runCatching { visitor(first) } } }
+            }
+        }
     }
 
     suspend fun walk(videoId: String): Result {

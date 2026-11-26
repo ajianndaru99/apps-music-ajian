@@ -93,6 +93,12 @@ internal open class YouTubeMusicStreamResolver(
         }
     }
 
+    /** Pre-warms NewPipe, player scripts, and guest visitor state so first play avoids cold start. */
+    suspend fun warmUp() {
+        ensureInitialized()
+        walker?.warmUp()
+    }
+
     /**
      * Resolves a Podium track into a [FacetResolution.Resolved] holding a [PlaybackTarget.DirectStream],
      * or a clean [FacetResolution.Miss] / [FacetResolution.Failed] upon failure.
@@ -337,7 +343,7 @@ internal open class YouTubeMusicStreamResolver(
     internal companion object {
         /** The song playing and the next one; more would only slow both down. */
         const val MAX_PARALLEL = 2
-        const val RECENT_MILLIS = 5 * 60_000L
+        const val RECENT_MILLIS = 15 * 60_000L
         const val RECENT_LIMIT = 64
 
         /** How long the service rests after asking every app to confirm it isn't a bot. */

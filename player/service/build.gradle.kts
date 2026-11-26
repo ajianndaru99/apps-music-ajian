@@ -12,6 +12,10 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     // Custom sources (D-91) may hand over a DASH manifest (one lossless representation, say).
     implementation(libs.media3.exoplayer.dash)
+    implementation(libs.media3.datasource)
+    implementation(libs.media3.datasource.okhttp)
+    implementation(libs.media3.database)
+    implementation(libs.okhttp)
     api(libs.media3.session)
     implementation(libs.media3.common)
     implementation(libs.kotlinx.coroutines.guava)

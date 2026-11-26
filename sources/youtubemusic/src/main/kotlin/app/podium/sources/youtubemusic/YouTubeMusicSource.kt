@@ -132,6 +132,9 @@ class YouTubeMusicSource internal constructor(
 
     private val browserAgent = userAgent
 
+    /** Warms up player scripts, guest visitor token, and NewPipe off the main thread. */
+    suspend fun warmUp() = resolver.warmUp()
+
     /**
      * The listener's session for the stream walk's signed-in apps (D-98): only while they're signed
      * in, as the channel they chose, with the browser they signed in with.

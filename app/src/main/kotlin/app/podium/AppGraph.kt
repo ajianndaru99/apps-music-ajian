@@ -73,7 +73,24 @@ class AppGraph(val context: Context) {
      * for an EXACT copy of an online song; the song's own source is the fallback. Never in the registry.
      */
     val customSources = CustomSources(credentials, health, appScope, clock::nowMillis)
-    val resolver = StreamResolver(registry, health, matcher, clock, equivalence = equivalence, preferred = customSources)
+
+    /** Persistent 512 MB LRU streaming cache in `cacheDir/stream`, checked before network resolution. */
+    val streamCache by lazy { app.podium.player.service.StreamAudioCache.get(context) }
+
+    val resolver = StreamResolver(
+        registry,
+        health,
+        matcher,
+        clock,
+        ownedCopies = listOf(
+            app.podium.sources.api.resolve.OwnedCopyLocator { track ->
+                if (registry.get(track.source.sourceId)?.descriptor?.environment != MusicEnvironment.ONLINE) null
+                else streamCache.findCompleteCached(track.id)?.let { track to it }
+            },
+        ),
+        equivalence = equivalence,
+        preferred = customSources,
+    )
 
     val libraryStore = LibraryStore(database)
     val catalog = TrackCatalog(registry) { id -> libraryStore.track(id) }
@@ -148,6 +165,22 @@ class AppGraph(val context: Context) {
         appScope.launch(Dispatchers.IO) {
             runCatching { android.webkit.WebSettings.getDefaultUserAgent(context) }.getOrNull()?.let {
                 webUserAgent = it
+            }
+            runCatching { youtubeMusic.warmUp() }
+        }
+    }
+
+    /** Pre-resolves top visible online track URLs into RAM cache so taps play instantly. */
+    fun prewarmTracks(tracks: List<app.podium.core.model.Track>, limit: Int = 2) {
+        if (tracks.isEmpty()) return
+        appScope.launch(Dispatchers.IO) {
+            for (track in tracks.take(limit)) {
+                if (registry.get(track.source.sourceId)?.descriptor?.environment != MusicEnvironment.ONLINE) continue
+                if (streamCache.findCompleteCached(track.id) != null) continue
+                val playback = registry.get(track.source.sourceId)?.playback ?: continue
+                runCatching {
+                    playback.resolve(track, app.podium.sources.api.QualityRequest.Maximum, app.podium.sources.api.Purpose.PREFETCH)
+                }
             }
         }
     }
@@ -360,6 +393,8 @@ class AppGraph(val context: Context) {
         override val recommendations = this@AppGraph.recommendations
         override val equivalence = this@AppGraph.equivalence
         override val streamProviders = this@AppGraph.customSources
+        override val streamCache get() = this@AppGraph.streamCache
+        override val preCacheNext = this@AppGraph.deviceSettings.preCacheNext
         override suspend fun playedSince(sinceMillis: Long) = onlineStore.playedSince(sinceMillis)
 
         override fun sessionActivity(context: Context): PendingIntent = PendingIntent.getActivity(

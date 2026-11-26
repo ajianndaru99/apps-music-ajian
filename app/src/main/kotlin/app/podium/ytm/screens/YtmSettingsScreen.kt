@@ -32,6 +32,13 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +60,9 @@ fun YtmSettingsScreen(
     val onlineLyrics by graph.deviceSettings.onlineLyrics.collectAsStateWithLifecycle()
     val onlineRecs by graph.deviceSettings.onlineRecommendations.collectAsStateWithLifecycle()
     val avoidRepeats by graph.deviceSettings.avoidRepeats.collectAsStateWithLifecycle()
+    val preCacheNext by graph.deviceSettings.preCacheNext.collectAsStateWithLifecycle()
+    var cacheBytes by remember { mutableLongStateOf(graph.streamCache.cacheSizeBytes()) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -248,6 +258,60 @@ fun YtmSettingsScreen(
                         checked = onlineLyrics,
                         onCheckedChange = { graph.deviceSettings.setOnlineLyrics(it) },
                     )
+                }
+            }
+
+            item(key = "storage_cache") {
+                HorizontalDivider(color = colors.divider)
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text(
+                        text = "Storage & Cache",
+                        style = YtmTheme.type.labelMedium,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                    SettingsToggleRow(
+                        title = "Pre-cache next song",
+                        subtitle = "Download the full next song into phone cache while playing",
+                        checked = preCacheNext,
+                        onCheckedChange = { graph.deviceSettings.setPreCacheNext(it) },
+                    )
+                    val usedMb = cacheBytes / (1024.0 * 1024.0)
+                    val maxMb = graph.streamCache.maxSizeBytes() / (1024L * 1024L)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                text = "Audio stream cache",
+                                style = YtmTheme.type.titleMedium,
+                                color = colors.onSurface,
+                            )
+                            Text(
+                                text = "%.1f MB / %d MB used on device".format(usedMb, maxMb),
+                                style = YtmTheme.type.bodyMedium,
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    cacheBytes = withContext(Dispatchers.IO) {
+                                        graph.streamCache.clear()
+                                        graph.streamCache.cacheSizeBytes()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text("Clear")
+                        }
+                    }
                 }
             }
 

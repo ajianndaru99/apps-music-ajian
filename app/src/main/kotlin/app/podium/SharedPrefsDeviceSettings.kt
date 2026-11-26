@@ -148,6 +148,14 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         prefs.edit { putBoolean(KEY_USE_YTM_UI, enabled) }
     }
 
+    private val _preCacheNext = MutableStateFlow(prefs.getBoolean(KEY_PRE_CACHE_NEXT, true))
+    override val preCacheNext: StateFlow<Boolean> = _preCacheNext.asStateFlow()
+
+    override fun setPreCacheNext(enabled: Boolean) {
+        _preCacheNext.value = enabled
+        prefs.edit { putBoolean(KEY_PRE_CACHE_NEXT, enabled) }
+    }
+
     override fun setAutoplay(enabled: Boolean) {
         _autoplay.value = enabled
         prefs.edit { putBoolean(KEY_AUTOPLAY, enabled) }
@@ -258,6 +266,7 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         const val KEY_CROSSFADE = "crossfade_seconds"
         const val KEY_FINISH = "finish"
         const val KEY_USE_YTM_UI = "use_ytm_ui"
+        const val KEY_PRE_CACHE_NEXT = "pre_cache_next"
         const val KEY_CUSTOM = "custom_argb"
         const val KEY_GRAIN = "grain"
         const val KEY_SOUND = "startup_sound"

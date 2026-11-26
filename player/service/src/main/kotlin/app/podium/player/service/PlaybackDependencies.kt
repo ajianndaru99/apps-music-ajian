@@ -58,6 +58,12 @@ interface PlaybackDependencies {
     /** The listener's custom sources (D-91), the same ones the [resolver] asks: for their names and whether they serve. */
     val streamProviders: StreamProviders get() = StreamProviders.None
 
+    /** Disk audio cache (512 MB LRU); null disables persistent streaming cache (e.g. unit tests). */
+    val streamCache: StreamAudioCache? get() = null
+
+    /** Whether full background pre-caching of the next track in queue is enabled. */
+    val preCacheNext: StateFlow<Boolean> get() = DefaultPreCacheNext
+
     /** Songs played since a time (for avoid-repeats), from ONLINE history. */
     suspend fun playedSince(sinceMillis: Long): Set<TrackId> = emptySet()
 
@@ -71,3 +77,4 @@ interface PlaybackDependencies {
 
 private val DefaultAutoplay: StateFlow<AutoplaySettings> = MutableStateFlow(AutoplaySettings(enabled = false))
 private val DefaultEffects: StateFlow<AudioEffects> = MutableStateFlow(AudioEffects())
+private val DefaultPreCacheNext: StateFlow<Boolean> = MutableStateFlow(false)

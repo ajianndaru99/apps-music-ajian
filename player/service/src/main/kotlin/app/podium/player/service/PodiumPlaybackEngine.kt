@@ -13,9 +13,15 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -40,6 +46,9 @@ import app.podium.sources.api.Purpose
 import app.podium.sources.api.resolve.ResolveOutcome
 import app.podium.sources.api.resolve.Selection
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -101,6 +110,8 @@ class PodiumPlaybackEngine(
     private var autoplayJob: Job? = null
     private var positionJob: Job? = null
     private var skipJob: Job? = null
+    private var preCacheJob: Job? = null
+    private var preCacheTargetUid: QueueUid? = null
 
     // Custom sources first (D-92). Declared before init too: the source watcher started there reads them.
 
@@ -130,8 +141,31 @@ class PodiumPlaybackEngine(
     var lastError: PodiumError? = null
         private set
 
+    private val streamHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectionPool(ConnectionPool(6, 5, TimeUnit.MINUTES))
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
+
+    private val directDataSourceFactory: DataSource.Factory = DefaultDataSource.Factory(
+        context,
+        OkHttpDataSource.Factory(streamHttpClient),
+    )
+
+    private val cacheDataSourceFactory: CacheDataSource.Factory? = deps.streamCache?.let { audioCache ->
+        CacheDataSource.Factory()
+            .setCache(audioCache.cache)
+            .setUpstreamDataSourceFactory(directDataSourceFactory)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    }
+
+    private val cachingAwareDataSourceFactory: DataSource.Factory = cacheDataSourceFactory?.let { cacheFactory ->
+        DataSource.Factory { CachePolicyDataSource(cacheFactory.createDataSource(), directDataSourceFactory.createDataSource()) }
+    } ?: directDataSourceFactory
+
     private val mediaSourceFactory: MediaSource.Factory =
-        DefaultMediaSourceFactory(ResolvingDataSource.Factory(DefaultDataSource.Factory(context), QueueDataSpecResolver()))
+        DefaultMediaSourceFactory(ResolvingDataSource.Factory(cachingAwareDataSourceFactory, QueueDataSpecResolver()))
 
     /** Settings ▸ Equaliser (D-76), in each player's own audio path. */
     private val equalizer = EqualizerProcessor()
@@ -145,8 +179,17 @@ class PodiumPlaybackEngine(
     val player: ExoPlayer = playerFactory?.invoke(context, mediaSourceFactory) ?: buildPlayer(context)
 
     private fun buildPlayer(context: Context): ExoPlayer {
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 15_000,
+                /* maxBufferMs = */ 60_000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_200,
+            )
+            .build()
         return ExoPlayer.Builder(context, EffectsRenderersFactory(context, equalizer, sound, deps.audioMeter))
             .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -704,7 +747,54 @@ class PodiumPlaybackEngine(
         startResolve(uid)
         val items = queue.state.value.items
         val index = items.indexOfFirst { it.uid == uid }
-        items.getOrNull(index + 1)?.let { startResolve(it.uid) }
+        val nextItem = items.getOrNull(index + 1)
+        if (nextItem != null) {
+            val nextDeferred = startResolve(nextItem.uid)
+            scheduleFullNextPreCache(nextItem, nextDeferred)
+        } else {
+            preCacheJob?.cancel()
+            preCacheTargetUid = null
+        }
+    }
+
+    private fun scheduleFullNextPreCache(
+        nextItem: app.podium.player.api.QueueItem,
+        nextDeferred: Deferred<ResolveOutcome>,
+    ) {
+        val audioCache = deps.streamCache ?: return
+        val factory = cacheDataSourceFactory ?: return
+        if (!deps.preCacheNext.value) return
+        if (nextItem.track.kind == app.podium.core.model.MediaKind.LIVE) return
+        if (preCacheTargetUid == nextItem.uid && preCacheJob?.isActive == true) return
+
+        preCacheJob?.cancel()
+        preCacheTargetUid = nextItem.uid
+        preCacheJob = scope.launch(Dispatchers.IO) {
+            // Let the currently playing song claim initial bandwidth first.
+            delay(PRECACHE_DELAY_MS)
+            val outcome = runCatching { nextDeferred.await() }.getOrNull() as? ResolveOutcome.Resolved ?: return@launch
+            val target = outcome.selection.target as? PlaybackTarget.DirectStream ?: return@launch
+            val media = target.media
+            if (StreamKind.of(media) != StreamKind.FILE) return@launch
+            if (!media.uri.startsWith("http", ignoreCase = true)) return@launch
+            if (media.uri.startsWith(StreamAudioCache.CACHED_URI_PREFIX)) return@launch
+            if (audioCache.isKeyComplete(media.cacheKey)) return@launch
+
+            audioCache.recordMeta(nextItem.track.id, media)
+            val dataSpec = DataSpec.Builder()
+                .setUri(Uri.parse(media.uri))
+                .setHttpRequestHeaders(media.headers)
+                .setKey(media.cacheKey)
+                .build()
+            runCatching {
+                val ds = factory.createDataSourceForDownloading()
+                CacheWriter(ds, dataSpec, ByteArray(PRECACHE_BUFFER_BYTES), null).cache()
+                Log.d(TAG, "pre-cached full next track ${nextItem.track.id}")
+            }.onFailure { err ->
+                if (err is kotlinx.coroutines.CancellationException) throw err
+                Log.d(TAG, "next track pre-cache stopped: ${err.javaClass.simpleName}")
+            }
+        }
     }
 
     private fun startResolve(uid: QueueUid): Deferred<ResolveOutcome> {
@@ -800,7 +890,13 @@ class PodiumPlaybackEngine(
             if (!NetworkPolicy.permits(target.media.uri)) {
                 throw PodiumResolveException(HealthOutcome.INVALID_MEDIA, "Refused an unencrypted stream off the listener's network")
             }
-            return dataSpec.withUri(Uri.parse(target.media.uri)).withAdditionalHeaders(target.media.headers)
+            val uri = Uri.parse(target.media.uri)
+            val cacheable = target.media.uri.startsWith("http", ignoreCase = true) && StreamKind.of(target.media) == StreamKind.FILE
+            if (cacheable && !target.media.uri.startsWith(StreamAudioCache.CACHED_URI_PREFIX)) {
+                deps.streamCache?.recordMeta(target.trackId, target.media)
+            }
+            val resolved = dataSpec.withUri(uri).withAdditionalHeaders(target.media.headers)
+            return if (cacheable) resolved.buildUpon().setKey(target.media.cacheKey).build() else resolved
         }
     }
 
@@ -824,6 +920,14 @@ class PodiumPlaybackEngine(
             }
         }
         val current = queue.state.value.current
+        val cacheMiss = current?.selection?.media?.uri?.startsWith(StreamAudioCache.CACHED_URI_PREFIX) == true
+        if (cacheMiss && current != null && refreshedAfterError.add(current.uid)) {
+            deps.streamCache?.forgetMeta(current.track.id)
+            recovery = app.podium.player.api.Recovery.REFRESHING_STREAM
+            publishExtras()
+            refreshAndResume(current.uid, player.currentPosition)
+            return
+        }
         val refused = PlaybackErrors.isRefusedStream(error) && current?.selection?.media != null
         // A stream URL that's refused (expired after a long pause, revoked) is asked for afresh from
         // the same source, once, and playback carries on where it was (D-18: same source, same copy).
@@ -959,7 +1063,36 @@ class PodiumPlaybackEngine(
         private const val SAVE_DEBOUNCE_MS = 750L
         private const val POSITION_SAVE_INTERVAL_MS = 10_000L
         private const val RECENT_WINDOW_MS = 6 * 60 * 60 * 1000L
+        private const val PRECACHE_DELAY_MS = 800L
+        private const val PRECACHE_BUFFER_BYTES = 64 * 1024
     }
+}
+
+private class CachePolicyDataSource(
+    private val cached: DataSource,
+    private val direct: DataSource,
+) : DataSource {
+    private var active: DataSource = direct
+
+    override fun addTransferListener(transferListener: TransferListener) {
+        cached.addTransferListener(transferListener)
+        direct.addTransferListener(transferListener)
+    }
+
+    override fun open(dataSpec: DataSpec): Long {
+        val scheme = dataSpec.uri.scheme?.lowercase()
+        val useCache = dataSpec.key != null && (scheme == "https" || scheme == "http")
+        active = if (useCache) cached else direct
+        return active.open(dataSpec)
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int = active.read(buffer, offset, length)
+
+    override fun getUri(): Uri? = active.uri
+
+    override fun getResponseHeaders(): Map<String, List<String>> = active.responseHeaders
+
+    override fun close() = active.close()
 }
 
 /** Debug-time invariant checks; flipped off for release by the app. */

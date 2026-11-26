@@ -32,6 +32,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Run unit tests
+        run: ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:testDebugUnitTest :sources:api:testDebugUnitTest --no-daemon
+
       - name: Build Debug APK
         run: ./gradlew :app:assembleDebug --no-daemon -Ppodium.minifyDebug=true -Ppodium.abi=arm64-v8a
 

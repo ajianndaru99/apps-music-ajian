@@ -80,6 +80,8 @@ fun YtmHomeScreen(
             is Outcome.Success -> {
                 shelves = result.value
                 loading = false
+                val topTracks = result.value.firstOrNull { it.tracks.isNotEmpty() }?.tracks.orEmpty()
+                if (topTracks.isNotEmpty()) graph.prewarmTracks(topTracks, limit = 2)
             }
             is Outcome.Failure -> {
                 errorMessage = result.error.toDisplayMessage()

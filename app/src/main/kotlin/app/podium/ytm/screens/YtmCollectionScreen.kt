@@ -75,6 +75,7 @@ fun YtmCollectionScreen(
             is Outcome.Success -> {
                 detail = result.value
                 loading = false
+                graph.prewarmTracks(result.value.tracks, limit = 2)
             }
             is Outcome.Failure -> {
                 errorMessage = result.error.toDisplayMessage()

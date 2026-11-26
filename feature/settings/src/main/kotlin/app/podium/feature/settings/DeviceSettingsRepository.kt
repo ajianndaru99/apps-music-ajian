@@ -101,6 +101,11 @@ interface DeviceSettingsRepository {
 
     fun setUseYtmUi(enabled: Boolean) {}
 
+    /** Pre-cache full next track in background for instant gapless playback and weak-signal resilience. */
+    val preCacheNext: StateFlow<Boolean> get() = On
+
+    fun setPreCacheNext(enabled: Boolean) {}
+
     fun setAppearance(appearance: DeviceAppearance)
     fun setPreview(appearance: DeviceAppearance?)
     fun setStartupSound(enabled: Boolean)
