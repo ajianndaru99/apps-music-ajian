@@ -56,6 +56,7 @@ import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
 import app.podium.ytm.openAlbumAction
 import app.podium.ytm.openArtistAction
+import app.podium.ytm.toDisplayMessage
 import kotlinx.coroutines.delay
 
 @Composable
@@ -98,7 +99,7 @@ fun YtmSearchScreen(
                     searching = false
                 }
                 is Outcome.Failure -> {
-                    errorMessage = outcome.error.message
+                    errorMessage = outcome.error.toDisplayMessage()
                     searching = false
                 }
             }

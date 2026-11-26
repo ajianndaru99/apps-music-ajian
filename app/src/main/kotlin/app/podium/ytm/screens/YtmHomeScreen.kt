@@ -49,6 +49,7 @@ import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
 import app.podium.ytm.openAlbumAction
 import app.podium.ytm.openArtistAction
+import app.podium.ytm.toDisplayMessage
 
 @Composable
 fun YtmHomeScreen(
@@ -81,7 +82,7 @@ fun YtmHomeScreen(
                 loading = false
             }
             is Outcome.Failure -> {
-                errorMessage = result.error.message
+                errorMessage = result.error.toDisplayMessage()
                 loading = false
             }
         }

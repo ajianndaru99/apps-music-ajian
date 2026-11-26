@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.podium.AppGraph
 import app.podium.core.common.Outcome
+import app.podium.core.common.PodiumError
 import app.podium.core.designsystem.artwork.ArtworkState
 import app.podium.core.designsystem.artwork.rememberArtworkState
 import app.podium.core.model.ArtistId
@@ -554,6 +555,23 @@ fun Track.openAlbumAction(onOpenCollection: (PlaylistId, String) -> Unit): (() -
     val albumRef = album ?: return null
     val id = albumRef.id ?: return null
     return { onOpenCollection(PlaylistId(id.value), albumRef.title) }
+}
+
+fun PodiumError.toDisplayMessage(): String = when (this) {
+    PodiumError.Offline -> "You're offline. Check your connection and try again."
+    is PodiumError.Network -> detail ?: "Network error. Check your connection."
+    is PodiumError.Server -> "Server error${httpStatus?.let { " ($it)" }.orEmpty()}. Try again later."
+    is PodiumError.AuthRequired, is PodiumError.AuthExpired -> "Please sign in to YouTube Music to continue."
+    is PodiumError.RateLimited -> "Too many requests. Please wait a moment and try again."
+    is PodiumError.NotFound -> "Couldn't find $what."
+    is PodiumError.NotPlayable -> reason
+    is PodiumError.UserActionRequired -> action
+    is PodiumError.Unsupported -> "Not supported: $what"
+    is PodiumError.InvalidMedia -> detail ?: "Invalid media."
+    is PodiumError.UnsupportedFormat -> "Unsupported format${codec?.let { " ($it)" }.orEmpty()}."
+    is PodiumError.PolicyDisabled -> detail ?: "Disabled by policy."
+    is PodiumError.PermissionRequired -> "Permission required: $permission"
+    is PodiumError.Unexpected -> detail ?: "Something went wrong."
 }
 
 fun formatDurationMs(ms: Long): String {

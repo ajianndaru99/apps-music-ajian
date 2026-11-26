@@ -49,6 +49,7 @@ import app.podium.ytm.YtmArtworkImage
 import app.podium.ytm.YtmTheme
 import app.podium.ytm.YtmTrackRow
 import app.podium.ytm.openArtistAction
+import app.podium.ytm.toDisplayMessage
 
 @Composable
 fun YtmCollectionScreen(
@@ -76,7 +77,7 @@ fun YtmCollectionScreen(
                 loading = false
             }
             is Outcome.Failure -> {
-                errorMessage = result.error.message
+                errorMessage = result.error.toDisplayMessage()
                 loading = false
             }
         }
