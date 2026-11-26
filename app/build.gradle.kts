@@ -22,6 +22,11 @@ android {
         // A device test of the updater (D-99) builds a "newer" copy: -Ppodium.versionCode=7 -Ppodium.versionName=0.1.5.1
         versionCode = providers.gradleProperty("podium.versionCode").orNull?.toInt() ?: 7
         versionName = providers.gradleProperty("podium.versionName").orNull ?: "0.1.5.1"
+        providers.gradleProperty("podium.abi").orNull?.let { abis ->
+            ndk {
+                abiFilters += abis.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            }
+        }
     }
     buildFeatures {
         buildConfig = true
@@ -64,6 +69,7 @@ android {
             // minification (D-99): -Ppodium.minifyDebug=true
             if (providers.gradleProperty("podium.minifyDebug").orNull == "true") {
                 isMinifyEnabled = true
+                isShrinkResources = true
                 proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             }
         }
