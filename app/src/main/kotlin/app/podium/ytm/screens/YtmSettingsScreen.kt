@@ -20,9 +20,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +37,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import kotlinx.coroutines.Dispatchers
@@ -78,12 +83,11 @@ fun YtmSettingsScreen(
     val savedAiBackupKey by graph.deviceSettings.aiExploreBackupApiKey.collectAsStateWithLifecycle()
     val autoUpdate by graph.updates.automatic.collectAsStateWithLifecycle()
     var cacheBytes by remember { mutableLongStateOf(graph.streamCache.cacheSizeBytes()) }
-    var aiKeyDraft by remember(savedAiKey) { mutableStateOf(savedAiKey) }
-    var revealAiKey by remember { mutableStateOf(false) }
-    var aiBackupKeyDraft by remember(savedAiBackupKey) { mutableStateOf(savedAiBackupKey) }
-    var revealBackupKey by remember { mutableStateOf(false) }
     var aiQuota by remember { mutableStateOf(graph.aiExplore.quotaStatus()) }
     LaunchedEffect(savedAiKey, aiProvider, savedAiBackupKey, aiBackupProvider) {
+        if (savedAiKey.isNotEmpty() && graph.aiExplore.quotaStatus().activeModel == null) {
+            graph.aiExplore.verifyKey(aiProvider, savedAiKey)
+        }
         aiQuota = graph.aiExplore.quotaStatus()
     }
     val scope = rememberCoroutineScope()
@@ -345,95 +349,32 @@ fun YtmSettingsScreen(
                         color = colors.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AiExploreProvider.entries.forEach { provider ->
-                            val selected = aiProvider == provider
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(if (selected) colors.chipSelectedBg else colors.chipUnselectedBg)
-                                    .clickable { graph.deviceSettings.setAiExploreProvider(provider) }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    text = if (provider == AiExploreProvider.GEMINI) "Gemini Flash-Lite" else "Groq Llama-3.3",
-                                    style = YtmTheme.type.labelMedium.copy(
-                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                                    ),
-                                    color = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = aiKeyDraft,
-                        onValueChange = { aiKeyDraft = it },
-                        singleLine = true,
-                        label = {
-                            Text(
-                                if (aiProvider == AiExploreProvider.GEMINI) {
-                                    "Gemini API Key (aistudio.google.com)"
-                                } else {
-                                    "Groq API Key (console.groq.com)"
-                                },
-                            )
-                        },
-                        visualTransformation = if (revealAiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { revealAiKey = !revealAiKey }) {
-                                Icon(
-                                    imageVector = if (revealAiKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                    contentDescription = if (revealAiKey) "Hide key" else "Show key",
-                                    tint = colors.onSurfaceVariant,
-                                )
+                    AiKeyConfigCard(
+                        title = "Primary AI Key",
+                        savedProvider = aiProvider,
+                        savedKey = savedAiKey,
+                        verifiedModel = if (savedAiKey.isNotEmpty()) aiQuota.activeModel else null,
+                        startCollapsedWhenSaved = true,
+                        onApply = { newProvider, newKey ->
+                            scope.launch {
+                                graph.deviceSettings.setAiExploreProvider(newProvider)
+                                graph.deviceSettings.setAiExploreApiKey(newKey)
+                                graph.aiExplore.clearCache()
+                                if (newKey.isNotBlank()) {
+                                    graph.aiExplore.verifyKey(newProvider, newKey)
+                                }
+                                aiQuota = graph.aiExplore.quotaStatus()
                             }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = colors.onSurface,
-                            unfocusedTextColor = colors.onSurface,
-                            focusedBorderColor = colors.onSurface,
-                            unfocusedBorderColor = colors.divider,
-                            focusedLabelColor = colors.onSurface,
-                            unfocusedLabelColor = colors.onSurfaceVariant,
-                            cursorColor = colors.onSurface,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = {
-                                graph.deviceSettings.setAiExploreApiKey(aiKeyDraft)
+                        onRemove = {
+                            scope.launch {
+                                graph.deviceSettings.setAiExploreApiKey("")
+                                graph.aiExplore.verifyKey(aiProvider, "")
                                 graph.aiExplore.clearCache()
                                 aiQuota = graph.aiExplore.quotaStatus()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.accent,
-                                contentColor = colors.background,
-                            ),
-                            shape = RoundedCornerShape(50),
-                        ) {
-                            Text("Save key", color = colors.background, fontWeight = FontWeight.SemiBold)
-                        }
-                        if (savedAiKey.isNotEmpty()) {
-                            OutlinedButton(
-                                onClick = {
-                                    aiKeyDraft = ""
-                                    graph.deviceSettings.setAiExploreApiKey("")
-                                    graph.aiExplore.clearCache()
-                                    aiQuota = graph.aiExplore.quotaStatus()
-                                },
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
-                                shape = RoundedCornerShape(50),
-                            ) {
-                                Text("Remove")
                             }
-                        }
-                    }
+                        },
+                    )
                     Spacer(Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -464,101 +405,32 @@ fun YtmSettingsScreen(
                             Text("Clear")
                         }
                     }
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        text = "Backup AI Key (Optional • Weekend Failover)",
-                        style = YtmTheme.type.labelMedium,
-                        color = colors.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AiExploreProvider.entries.forEach { provider ->
-                            val selected = aiBackupProvider == provider
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(if (selected) colors.chipSelectedBg else colors.chipUnselectedBg)
-                                    .clickable { graph.deviceSettings.setAiExploreBackupProvider(provider) }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    text = if (provider == AiExploreProvider.GEMINI) "Gemini Flash-Lite" else "Groq Llama-3.3",
-                                    style = YtmTheme.type.labelMedium.copy(
-                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                                    ),
-                                    color = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = aiBackupKeyDraft,
-                        onValueChange = { aiBackupKeyDraft = it },
-                        singleLine = true,
-                        label = {
-                            Text(
-                                if (aiBackupProvider == AiExploreProvider.GEMINI) {
-                                    "Backup Gemini Key"
-                                } else {
-                                    "Backup Groq Key (console.groq.com)"
-                                },
-                            )
-                        },
-                        visualTransformation = if (revealBackupKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { revealBackupKey = !revealBackupKey }) {
-                                Icon(
-                                    imageVector = if (revealBackupKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                    contentDescription = if (revealBackupKey) "Hide key" else "Show key",
-                                    tint = colors.onSurfaceVariant,
-                                )
+                    Spacer(Modifier.height(12.dp))
+                    AiKeyConfigCard(
+                        title = "Backup AI Key (Weekend Failover)",
+                        savedProvider = aiBackupProvider,
+                        savedKey = savedAiBackupKey,
+                        verifiedModel = null,
+                        startCollapsedWhenSaved = true,
+                        onApply = { newProvider, newKey ->
+                            scope.launch {
+                                graph.deviceSettings.setAiExploreBackupProvider(newProvider)
+                                graph.deviceSettings.setAiExploreBackupApiKey(newKey)
+                                graph.aiExplore.clearCache()
+                                if (newKey.isNotBlank()) {
+                                    graph.aiExplore.verifyKey(newProvider, newKey)
+                                }
+                                aiQuota = graph.aiExplore.quotaStatus()
                             }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = colors.onSurface,
-                            unfocusedTextColor = colors.onSurface,
-                            focusedBorderColor = colors.onSurface,
-                            unfocusedBorderColor = colors.divider,
-                            focusedLabelColor = colors.onSurface,
-                            unfocusedLabelColor = colors.onSurfaceVariant,
-                            cursorColor = colors.onSurface,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = {
-                                graph.deviceSettings.setAiExploreBackupApiKey(aiBackupKeyDraft)
+                        onRemove = {
+                            scope.launch {
+                                graph.deviceSettings.setAiExploreBackupApiKey("")
                                 graph.aiExplore.clearCache()
                                 aiQuota = graph.aiExplore.quotaStatus()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.accent,
-                                contentColor = colors.background,
-                            ),
-                            shape = RoundedCornerShape(50),
-                        ) {
-                            Text("Save backup", color = colors.background, fontWeight = FontWeight.SemiBold)
-                        }
-                        if (savedAiBackupKey.isNotEmpty()) {
-                            OutlinedButton(
-                                onClick = {
-                                    aiBackupKeyDraft = ""
-                                    graph.deviceSettings.setAiExploreBackupApiKey("")
-                                    aiQuota = graph.aiExplore.quotaStatus()
-                                },
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
-                                shape = RoundedCornerShape(50),
-                            ) {
-                                Text("Remove")
                             }
-                        }
-                    }
+                        },
+                    )
                 }
             }
 
@@ -648,5 +520,259 @@ private fun SettingsToggleRow(
                 uncheckedTrackColor = colors.surface,
             ),
         )
+    }
+}
+
+private enum class AiKeyConfirmAction { SAVE, REMOVE }
+
+@Composable
+private fun AiKeyConfigCard(
+    title: String,
+    savedProvider: AiExploreProvider,
+    savedKey: String,
+    verifiedModel: String?,
+    startCollapsedWhenSaved: Boolean,
+    onApply: (AiExploreProvider, String) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val colors = YtmTheme.colors
+    val isSaved = savedKey.isNotEmpty()
+    val statusGreen = Color(0xFF4ADE80)
+
+    var providerDraft by remember(savedProvider) { mutableStateOf(savedProvider) }
+    var keyDraft by remember(savedKey) { mutableStateOf(savedKey) }
+    var revealKey by remember { mutableStateOf(false) }
+    var expanded by remember(savedKey) { mutableStateOf(!(startCollapsedWhenSaved && isSaved)) }
+    var pendingConfirm by remember { mutableStateOf<AiKeyConfirmAction?>(null) }
+
+    val hasPendingChange = providerDraft != savedProvider || keyDraft.trim() != savedKey
+    val maskedSuffix = if (savedKey.length >= 4) "••••${savedKey.takeLast(4)}" else "Saved"
+
+    pendingConfirm?.let { action ->
+        AlertDialog(
+            onDismissRequest = { pendingConfirm = null },
+            containerColor = colors.surfaceElevated,
+            titleContentColor = colors.onSurface,
+            textContentColor = colors.onSurfaceVariant,
+            title = {
+                Text(
+                    text = if (action == AiKeyConfirmAction.SAVE) "Confirm $title change?" else "Remove $title?",
+                    style = YtmTheme.type.titleLarge,
+                )
+            },
+            text = {
+                Text(
+                    if (action == AiKeyConfirmAction.SAVE) {
+                        "This will replace your connected key and reconnect Explore AI."
+                    } else {
+                        "Removing this key will disconnect AI Explore until you add one again."
+                    },
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingConfirm = null
+                        if (action == AiKeyConfirmAction.SAVE) {
+                            onApply(providerDraft, keyDraft.trim())
+                            expanded = false
+                            revealKey = false
+                        } else {
+                            keyDraft = ""
+                            onRemove()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.accent,
+                        contentColor = colors.background,
+                    ),
+                    shape = RoundedCornerShape(50),
+                ) {
+                    Text(
+                        if (action == AiKeyConfirmAction.SAVE) "Confirm" else "Remove",
+                        color = colors.background,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingConfirm = null }) {
+                    Text("Cancel", color = colors.onSurfaceVariant)
+                }
+            },
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surfaceVariant)
+            .padding(12.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = title,
+                        style = YtmTheme.type.titleMedium,
+                        color = colors.onSurface,
+                    )
+                    if (isSaved) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(statusGreen.copy(alpha = 0.16f))
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(statusGreen),
+                            )
+                            Text(
+                                text = "Connected",
+                                style = YtmTheme.type.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = statusGreen,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                val subtitleText = if (isSaved) {
+                    val providerShort = if (savedProvider == AiExploreProvider.GEMINI) "Gemini" else "Groq"
+                    val modelPart = verifiedModel?.let { " • $it" }.orEmpty()
+                    "$providerShort ($maskedSuffix)$modelPart"
+                } else {
+                    "Not configured"
+                }
+                Text(
+                    text = subtitleText,
+                    style = YtmTheme.type.labelSmall,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (expanded) "Hide" else "View",
+                    style = YtmTheme.type.labelMedium,
+                    color = colors.onSurfaceVariant,
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "Hide key section" else "View key section",
+                    tint = colors.onSurfaceVariant,
+                )
+            }
+        }
+
+        if (expanded) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AiExploreProvider.entries.forEach { provider ->
+                    val selected = providerDraft == provider
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (selected) colors.chipSelectedBg else colors.chipUnselectedBg)
+                            .clickable { providerDraft = provider }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            text = if (provider == AiExploreProvider.GEMINI) "Gemini Flash-Lite" else "Groq Llama-3.3",
+                            style = YtmTheme.type.labelMedium.copy(
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            ),
+                            color = if (selected) colors.chipSelectedFg else colors.chipUnselectedFg,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = keyDraft,
+                onValueChange = { keyDraft = it },
+                singleLine = true,
+                label = {
+                    Text(
+                        if (providerDraft == AiExploreProvider.GEMINI) {
+                            "Gemini API Key (aistudio.google.com)"
+                        } else {
+                            "Groq API Key (console.groq.com)"
+                        },
+                    )
+                },
+                visualTransformation = if (revealKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { revealKey = !revealKey }) {
+                        Icon(
+                            imageVector = if (revealKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = if (revealKey) "Hide key" else "Show key",
+                            tint = colors.onSurfaceVariant,
+                        )
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = colors.onSurface,
+                    unfocusedTextColor = colors.onSurface,
+                    focusedBorderColor = colors.onSurface,
+                    unfocusedBorderColor = colors.divider,
+                    focusedLabelColor = colors.onSurface,
+                    unfocusedLabelColor = colors.onSurfaceVariant,
+                    cursorColor = colors.onSurface,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val saveEnabled = keyDraft.trim().isNotEmpty() && (!isSaved || hasPendingChange)
+                Button(
+                    onClick = {
+                        if (isSaved) {
+                            pendingConfirm = AiKeyConfirmAction.SAVE
+                        } else {
+                            onApply(providerDraft, keyDraft.trim())
+                            expanded = false
+                            revealKey = false
+                        }
+                    },
+                    enabled = saveEnabled,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.accent,
+                        contentColor = colors.background,
+                        disabledContainerColor = colors.chipUnselectedBg,
+                        disabledContentColor = colors.onSurfaceMuted,
+                    ),
+                    shape = RoundedCornerShape(50),
+                ) {
+                    Text(
+                        if (isSaved) "Update key" else "Save key",
+                        color = if (saveEnabled) colors.background else colors.onSurfaceMuted,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (isSaved) {
+                    OutlinedButton(
+                        onClick = { pendingConfirm = AiKeyConfirmAction.REMOVE },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
+                        shape = RoundedCornerShape(50),
+                    ) {
+                        Text("Remove")
+                    }
+                }
+            }
+        }
     }
 }

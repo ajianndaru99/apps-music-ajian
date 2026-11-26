@@ -132,6 +132,12 @@ class AiExploreCuratorTest {
         curator.loadExplore(forceRefresh = true)
         assertEquals(1, visitedUrls.size)
         assertTrue(visitedUrls.single().contains("gemini-3.9-flash-lite:generateContent"))
+
+        // verifyKey validates via GET /models with zero generation calls added
+        val callsBeforeVerify = curator.quotaStatus().callsUsedToday
+        val discovered = curator.verifyKey(AiExploreProvider.GEMINI, "AIza-discovery-test")
+        assertEquals("gemini-3.9-flash-lite", discovered)
+        assertEquals(callsBeforeVerify, curator.quotaStatus().callsUsedToday)
     }
 
     @Test

@@ -117,6 +117,7 @@ class AiExploreCurator internal constructor(
         val activeAccount = normalizedAccountKey(accountKey(), online.status.value)
         val cached = store.readBlueprint(activeAccount)
         val provider = settings.aiExploreProvider.value
+        val backupProvider = settings.aiExploreBackupProvider.value
         return AiQuotaStatus(
             callsUsedToday = store.callsOnDay(dayKey(now)),
             maxCallsPerDay = MAX_AI_CALLS_PER_DAY,
@@ -125,8 +126,24 @@ class AiExploreCurator internal constructor(
             hasApiKey = settings.aiExploreApiKey.value.isNotBlank(),
             hasBackupKey = settings.aiExploreBackupApiKey.value.isNotBlank(),
             provider = provider,
-            activeModel = store.workingModel(provider),
+            activeModel = store.workingModel(provider) ?: store.workingModel(backupProvider),
         )
+    }
+
+    /**
+     * Verifies [apiKey] via the provider's lightweight `GET /models` listing endpoint
+     * (consumes zero generation quota) and caches the best available Flash/chat model.
+     */
+    suspend fun verifyKey(provider: AiExploreProvider, apiKey: String): String? {
+        val cleaned = apiKey.trim()
+        if (cleaned.isEmpty()) {
+            store.setWorkingModel(provider, null)
+            return null
+        }
+        val models = discoverModels(provider, cleaned)
+        val chosen = models.firstOrNull()
+        store.setWorkingModel(provider, chosen)
+        return chosen
     }
 
     fun clearCache() {

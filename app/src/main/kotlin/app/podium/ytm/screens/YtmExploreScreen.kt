@@ -363,11 +363,8 @@ private fun AiExploreHeaderCard(
     onOpenSettings: () -> Unit,
 ) {
     val colors = YtmTheme.colors
-    val sourceLabel = when (blueprint.source) {
-        ExploreBlueprintSource.AI_GEMINI -> "AI Curated • Gemini Free Tier"
-        ExploreBlueprintSource.AI_GROQ -> "AI Curated • Groq Free Tier"
-        ExploreBlueprintSource.LOCAL_FALLBACK -> "Smart Explore • YouTube Habits & Trends"
-    }
+    val isAiConnected = blueprint.source != ExploreBlueprintSource.LOCAL_FALLBACK
+    val aiStatusTint = if (isAiConnected) Color(0xFF4ADE80) else Color(0xFFF87171)
 
     Column(
         modifier = Modifier
@@ -382,25 +379,12 @@ private fun AiExploreHeaderCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.AutoAwesome,
-                    contentDescription = null,
-                    tint = colors.onSurface,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = sourceLabel,
-                    style = YtmTheme.type.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = colors.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Icon(
+                imageVector = Icons.Filled.AutoAwesome,
+                contentDescription = if (isAiConnected) "AI connected" else "AI disconnected",
+                tint = aiStatusTint,
+                modifier = Modifier.size(20.dp),
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
                     onClick = onShuffleLocal,
