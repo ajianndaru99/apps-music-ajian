@@ -36,7 +36,10 @@ jobs:
         run: |
           set -o pipefail
           ./gradlew :player:service:testDebugUnitTest :sources:youtubemusic:test :sources:api:test --no-daemon --console=plain 2>&1 | tee test_out.log || {
-            awk '/\* What went wrong:|e: file:|> Task .* FAILED/{flag=1} flag && NF {print "::error::" $0}' test_out.log | head -n 9
+            for f in player/service/build/test-results/testDebugUnitTest/TEST-*.xml; do
+              [ -f "$f" ] && grep -qE 'failures="[1-9]|errors="[1-9]' "$f" && echo "::error::$(basename "$f"): $(grep -m1 -E '<failure|<error|message=' "$f" | tr '\n' ' ' | cut -c1-300)"
+            done
+            awk '/\* What went wrong:|e: file:|> Task .* FAILED/{flag=1} flag && NF {print "::error::" $0}' test_out.log | head -n 5
             exit 1
           }
 
